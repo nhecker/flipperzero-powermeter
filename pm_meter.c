@@ -22,10 +22,16 @@ const PmPinDef pm_pins[] = {
 const size_t pm_pin_count = COUNT_OF(pm_pins);
 
 const PmGraphSpec pm_graphs[] = {
-    {"2 min", 1},
-    {"30 min", 15},
-    {"60 min", 30},
+    {"2 min", "2m", 1},
+    {"30 min", "30m", 15},
+    {"60 min", "60m", 30},
 };
+const size_t pm_graph_count = COUNT_OF(pm_graphs);
+
+uint32_t pm_graph_span(uint8_t index) {
+    if(index >= pm_graph_count) return 0;
+    return (uint32_t)PM_GRAPH_W * pm_graphs[index].secs_per_px;
+}
 
 /* One blip per pulse. Every element is gated by the user's own system settings
  * -- LED brightness, speaker volume, vibro enable -- so there is nothing here

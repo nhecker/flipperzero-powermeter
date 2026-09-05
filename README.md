@@ -137,9 +137,12 @@ a rating on the label is ideal.
 
 Pages:
 
-1. **Live** — instantaneous demand, plus 1 / 15 / 60 minute averages, pulse count and
-   session energy. Averages over a window longer than the app has been running are taken
-   over the history that exists.
+1. **Live** — instantaneous demand, plus 2 / 30 / 60 minute averages, pulse count and
+   session energy. Those three spans are exactly the three graph windows, so a figure
+   here and the `avg` on the matching chart always describe the same period. Averages
+   over a window longer than the app has been running are taken over the history that
+   exists — which is why, under a steady load, all three can read the same. That is the
+   correct answer, not a stuck value.
 2. **2 min** graph, 1 s per pixel
 3. **30 min** graph, 15 s per pixel
 4. **60 min** graph, 30 s per pixel

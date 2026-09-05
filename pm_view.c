@@ -57,14 +57,16 @@ static void pm_draw_live(Canvas* canvas, PowerMeter* app) {
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_str(canvas, 108, 33, "W");
 
-    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, 60, NULL));
-    pm_draw_pair(canvas, 0, 45, "1m", buf);
+    /* Same three spans the graph pages plot, so a figure here and the avg on
+     * the matching chart always mean the same window. */
+    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, pm_graph_span(0), NULL));
+    pm_draw_pair(canvas, 0, 45, pm_graphs[0].short_title, buf);
 
-    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, 900, NULL));
-    pm_draw_pair_r(canvas, 64, 45, "15m", buf);
+    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, pm_graph_span(1), NULL));
+    pm_draw_pair_r(canvas, 64, 45, pm_graphs[1].short_title, buf);
 
-    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, 3600, NULL));
-    pm_draw_pair(canvas, 0, 54, "60m", buf);
+    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, pm_graph_span(2), NULL));
+    pm_draw_pair(canvas, 0, 54, pm_graphs[2].short_title, buf);
 
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)app->session_pulses);
     pm_draw_pair_r(canvas, 64, 54, "Pulses", buf);

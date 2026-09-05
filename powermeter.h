@@ -61,12 +61,18 @@ typedef struct {
 
 typedef struct {
     const char* title;
+    const char* short_title;
     uint32_t secs_per_px;
 } PmGraphSpec;
 
 extern const PmPinDef pm_pins[];
 extern const size_t pm_pin_count;
 extern const PmGraphSpec pm_graphs[];
+extern const size_t pm_graph_count;
+
+/** Seconds a graph page covers. The Live averages use the same spans so the
+ *  two screens can never describe different windows under the same label. */
+uint32_t pm_graph_span(uint8_t index);
 
 typedef struct {
     uint32_t imp_per_kwh;
