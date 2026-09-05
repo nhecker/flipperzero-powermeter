@@ -181,7 +181,8 @@ void pm_session_reset(PowerMeter* app) {
     app->last_interval = 0;
     app->last_pulse_tick = 0;
     app->have_pulse = false;
-    app->demo_accum = 0;
+    app->demo_primed = false;
+    app->demo_interval = 0;
     app->start_tick = furi_get_tick();
 }
 
@@ -194,19 +195,37 @@ static uint32_t pm_rand(PowerMeter* app) {
     return x;
 }
 
-/* Synthesise pulses at the rate the configured demo load implies, with a little
- * jitter so the graphs do not look like a test pattern. */
-static uint32_t pm_demo_pulses(PowerMeter* app) {
+/* Emit on a schedule kept in milliseconds rather than accumulating fractions
+ * per tick. The tick grid is 100 ms, so an accumulator can only ever place a
+ * pulse on a 100 ms boundary: at 12 kW the true interval is 300 ms, and the
+ * emitted gaps alternate 300/400 ms, which reads back as 9-18 kW. Scheduling
+ * the next pulse time exactly and reporting that time keeps the demo honest to
+ * the millisecond, matching what a real ISR-timestamped meter would give. */
+static uint32_t pm_demo_pulses(PowerMeter* app, uint32_t now) {
     if(app->cfg.demo_watts == 0) return 0;
-    uint32_t watts = app->cfg.demo_watts;
-    uint32_t jitter = watts / 8;
-    if(jitter) watts = watts - jitter + (pm_rand(app) % (2 * jitter + 1));
+    if(!app->demo_primed) {
+        app->demo_primed = true;
+        app->demo_next_tick = now;
+    }
 
-    /* micro-pulses this tick = W * imp * tick_ms / 3600 */
-    app->demo_accum += (uint32_t)(((uint64_t)watts * app->cfg.imp_per_kwh * PM_TICK_MS) / 3600ULL);
-    uint32_t pulses = app->demo_accum / 1000000u;
-    app->demo_accum -= pulses * 1000000u;
-    return pulses;
+    uint32_t emitted = 0;
+    while((int32_t)(now - app->demo_next_tick) >= 0) {
+        uint32_t watts = app->cfg.demo_watts;
+        /* A little wander so the plot is not a suspiciously perfect line, but
+         * small enough that the reading still says what you dialled in. */
+        uint32_t jitter = watts / 32;
+        if(jitter) watts = watts - jitter + (pm_rand(app) % (2 * jitter + 1));
+
+        uint32_t interval = pm_interval_from_watts(app->cfg.imp_per_kwh, watts);
+        if(interval == 0) interval = 1;
+
+        app->demo_pulse_tick = app->demo_next_tick;
+        app->demo_interval = interval;
+        app->demo_next_tick += interval;
+
+        if(++emitted >= 64) break; /* do not stall the tick on absurd rates */
+    }
+    return emitted;
 }
 
 static void pm_feedback(PowerMeter* app) {
@@ -219,14 +238,10 @@ void pm_tick(void* ctx) {
     uint32_t fresh = 0;
 
     if(app->cfg.source == PmSourceDemo) {
-        fresh = pm_demo_pulses(app);
+        fresh = pm_demo_pulses(app, now);
         if(fresh) {
-            if(app->have_pulse) {
-                uint32_t gap = now - app->last_pulse_tick;
-                app->last_interval = gap / fresh;
-                if(app->last_interval == 0) app->last_interval = 1;
-            }
-            app->last_pulse_tick = now;
+            if(app->have_pulse) app->last_interval = app->demo_interval;
+            app->last_pulse_tick = app->demo_pulse_tick;
             app->have_pulse = true;
         }
     } else {
@@ -263,7 +278,14 @@ void pm_tick(void* ctx) {
         /* Attribute the energy to the interval it flowed over, not to the
          * instant the pulse landed, so a slow meter reads as a level load
          * instead of a comb of spikes. */
-        pm_ring_add_interval(&app->ring, fresh * PM_MILLI, app->last_interval, now % 1000);
+        /* Age the pulse properly: it landed at last_pulse_tick, which may be
+         * up to a tick before now and possibly in an earlier second. */
+        pm_ring_add_interval(
+            &app->ring,
+            fresh * PM_MILLI,
+            app->last_interval,
+            now - app->last_pulse_tick,
+            now % 1000);
         app->session_pulses += fresh;
     }
 

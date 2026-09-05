@@ -6,6 +6,7 @@
 #include <gui/gui.h>
 #include <gui/view.h>
 #include <gui/view_dispatcher.h>
+#include <gui/modules/number_input.h>
 #include <gui/modules/variable_item_list.h>
 #include <notification/notification.h>
 #include <notification/notification_messages.h>
@@ -28,11 +29,13 @@
 typedef enum {
     PmViewMain,
     PmViewSettings,
+    PmViewNumber,
 } PmViewId;
 
 typedef enum {
     PmEventExit = 100,
     PmEventSettings,
+    PmEventNumber,
 } PmEvent;
 
 typedef enum {
@@ -99,6 +102,7 @@ typedef struct {
     ViewDispatcher* view_dispatcher;
     View* main_view;
     VariableItemList* settings_list;
+    NumberInput* number_input;
     NotificationApp* notifications;
     Storage* storage;
 
@@ -125,7 +129,12 @@ typedef struct {
     uint32_t blink_until;
     uint32_t last_draw_sec;
 
-    uint32_t demo_accum;
+    /* The demo emits on a millisecond schedule of its own rather than on the
+     * tick grid; see pm_demo_pulses. */
+    uint32_t demo_next_tick;
+    uint32_t demo_pulse_tick;
+    uint32_t demo_interval;
+    bool demo_primed;
     uint32_t rng;
 
     /* Scratch for graph rendering. Lives here rather than on the draw
@@ -153,6 +162,7 @@ void pm_config_set_defaults(PmConfig* cfg);
 void pm_config_load(PowerMeter* app);
 void pm_config_save(PowerMeter* app);
 void pm_settings_build(PowerMeter* app);
+void pm_settings_refresh_imp(PowerMeter* app);
 
 /* pm_view.c */
 void pm_view_draw(Canvas* canvas, void* model);

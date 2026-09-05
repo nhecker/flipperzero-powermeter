@@ -90,16 +90,16 @@ static void test_ring_basics(void) {
     CHECK_EQ(pm_ring_sum(&ring, 60, &used), 0);
     CHECK_EQ(used, 0);
     /* Adding before the ring is primed must be a no-op, not a stray write. */
-    pm_ring_add_interval(&ring, 7000, 0, 0);
+    pm_ring_add_interval(&ring, 7000, 0, 0, 0);
     CHECK_EQ(pm_ring_sum(&ring, 60, &used), 0);
 
     pm_ring_advance(&ring, 100);
-    pm_ring_add_interval(&ring, 5000, 0, 0);
+    pm_ring_add_interval(&ring, 5000, 0, 0, 0);
     CHECK_EQ(pm_ring_sum(&ring, 60, &used), 5000);
     CHECK_EQ(used, 1);
 
     pm_ring_advance(&ring, 101);
-    pm_ring_add_interval(&ring, 3000, 0, 0);
+    pm_ring_add_interval(&ring, 3000, 0, 0, 0);
     CHECK_EQ(pm_ring_sum(&ring, 60, &used), 8000);
     CHECK_EQ(used, 2);
 
@@ -122,7 +122,7 @@ static void test_ring_wrap(void) {
 
     for(uint32_t s = 1; s <= 5000; s++) {
         pm_ring_advance(&ring, s);
-        pm_ring_add_interval(&ring, 1000, 0, 0);
+        pm_ring_add_interval(&ring, 1000, 0, 0, 0);
     }
 
     uint32_t used = 0;
@@ -141,7 +141,7 @@ static void test_ring_wrap(void) {
 static void test_ring_stale_jump(void) {
     pm_ring_reset(&ring);
     pm_ring_advance(&ring, 10);
-    pm_ring_add_interval(&ring, 42000, 0, 0);
+    pm_ring_add_interval(&ring, 42000, 0, 0, 0);
 
     /* Jumping past the whole window discards everything instead of aliasing. */
     pm_ring_advance(&ring, 10 + PM_RING_SECONDS + 5);
@@ -149,15 +149,15 @@ static void test_ring_stale_jump(void) {
     CHECK_EQ(pm_ring_sum(&ring, PM_RING_SECONDS, &used), 0);
     CHECK_EQ(used, 1);
 
-    pm_ring_add_interval(&ring, 2000, 0, 0);
+    pm_ring_add_interval(&ring, 2000, 0, 0, 0);
     CHECK_EQ(pm_ring_sum(&ring, PM_RING_SECONDS, NULL), 2000);
 }
 
 static void test_ring_saturation(void) {
     pm_ring_reset(&ring);
     pm_ring_advance(&ring, 1);
-    pm_ring_add_interval(&ring, 60000, 0, 0);
-    pm_ring_add_interval(&ring, 60000, 0, 0);
+    pm_ring_add_interval(&ring, 60000, 0, 0, 0);
+    pm_ring_add_interval(&ring, 60000, 0, 0, 0);
     CHECK_EQ(pm_ring_sum_at(&ring, 0, 1), 65535);
 }
 
@@ -170,7 +170,7 @@ static void test_ring_interval(void) {
 
     /* 2 s interval landing exactly on a second boundary: one full second into
      * the previous bucket, nothing into the partial current one. */
-    pm_ring_add_interval(&ring, 1000, 2000, 0);
+    pm_ring_add_interval(&ring, 1000, 2000, 0, 0);
     CHECK_EQ(pm_ring_sum(&ring, 60, NULL), 1000);
     CHECK_EQ(pm_ring_sum_at(&ring, 1, 1), 500);
     CHECK_EQ(pm_ring_sum_at(&ring, 2, 1), 500);
@@ -182,7 +182,7 @@ static void test_ring_interval(void) {
         for(uint32_t s = 1; s <= 20; s++) {
             pm_ring_advance(&ring, s);
         }
-        pm_ring_add_interval(&ring, 1000, 3600, frac);
+        pm_ring_add_interval(&ring, 1000, 3600, 0, frac);
         CHECK_EQ(pm_ring_sum(&ring, 60, NULL), 1000);
     }
 
@@ -190,7 +190,7 @@ static void test_ring_interval(void) {
     pm_ring_reset(&ring);
     pm_ring_advance(&ring, 0);
     pm_ring_advance(&ring, 1);
-    pm_ring_add_interval(&ring, 1000, 9999999, 0);
+    pm_ring_add_interval(&ring, 1000, 9999999, 0, 0);
     CHECK(pm_ring_sum(&ring, PM_RING_SECONDS, NULL) <= 1000);
 }
 
@@ -206,7 +206,7 @@ static void test_steady_load_is_not_spiky(void) {
     for(uint32_t pulse = 0; pulse < 200; pulse++) {
         ms += 3600;
         pm_ring_advance(&ring, ms / 1000);
-        pm_ring_add_interval(&ring, PM_MILLI, 3600, ms % 1000);
+        pm_ring_add_interval(&ring, PM_MILLI, 3600, 0, ms % 1000);
     }
 
     /* Every individual second in the settled middle should read near 1 kW,
@@ -252,6 +252,60 @@ static void test_bar_height(void) {
     CHECK(pm_bar_height(100, 10000, 39, true) > pm_bar_height(100, 10000, 39, false));
 }
 
+static void test_interval_round_trip(void) {
+    /* The demo derives its schedule from this, so it has to be the exact
+     * inverse of the reading the app then computes back. */
+    const uint32_t loads[] = {100, 250, 1000, 3600, 12000, 48000};
+    for(size_t i = 0; i < sizeof(loads) / sizeof(loads[0]); i++) {
+        uint32_t ms = pm_interval_from_watts(1000, loads[i]);
+        uint32_t back = pm_watts_from_interval(1000, ms);
+        /* Within the rounding of a whole-millisecond interval. */
+        uint32_t tol = loads[i] / 50 + 1;
+        CHECK(back + tol >= loads[i] && loads[i] + tol >= back);
+    }
+    CHECK_EQ(pm_interval_from_watts(1000, 3600), 1000);
+    CHECK_EQ(pm_interval_from_watts(1000, 12000), 300);
+    CHECK_EQ(pm_interval_from_watts(0, 1000), 0);
+    CHECK_EQ(pm_interval_from_watts(1000, 0), 0);
+}
+
+static void test_ring_age(void) {
+    /* A pulse drained a tick late must land in the seconds it actually spanned,
+     * not the ones ending at the drain. */
+    pm_ring_reset(&ring);
+    pm_ring_advance(&ring, 0);
+    for(uint32_t sec = 1; sec <= 10; sec++) {
+        pm_ring_advance(&ring, sec);
+    }
+    /* 1 s interval that ended 2 s ago, sampled at a second boundary. */
+    pm_ring_add_interval(&ring, 1000, 1000, 2000, 0);
+    CHECK_EQ(pm_ring_sum(&ring, 60, NULL), 1000);
+    CHECK_EQ(pm_ring_sum_at(&ring, 0, 1), 0);
+    CHECK_EQ(pm_ring_sum_at(&ring, 1, 1), 0);
+    CHECK_EQ(pm_ring_sum_at(&ring, 3, 1), 1000);
+}
+
+static void test_triple_and_wh(void) {
+    char buf[40];
+    pm_fmt_triple(buf, sizeof(buf), 277, 304, 517);
+    CHECK_STR(buf, "277/304/517 W");
+    /* One unit for all three once any of them is large. */
+    pm_fmt_triple(buf, sizeof(buf), 300, 1200, 12300);
+    CHECK_STR(buf, "0.3/1.2/12.3 kW");
+
+    pm_fmt_wh_per_pulse(buf, sizeof(buf), 1000);
+    CHECK_STR(buf, "1.00Wh");
+    /* A high-demand meter labelled 200 Wh/pulse is 5 imp/kWh. */
+    pm_fmt_wh_per_pulse(buf, sizeof(buf), 5);
+    CHECK_STR(buf, "200Wh");
+    pm_fmt_wh_per_pulse(buf, sizeof(buf), 3200);
+    CHECK_STR(buf, "0.313Wh");
+    pm_fmt_wh_per_pulse(buf, sizeof(buf), 800);
+    CHECK_STR(buf, "1.25Wh");
+    pm_fmt_wh_per_pulse(buf, sizeof(buf), 0);
+    CHECK_STR(buf, "-");
+}
+
 static void test_formatting(void) {
     char buf[24];
 
@@ -295,6 +349,9 @@ int main(void) {
     test_ring_interval();
     test_steady_load_is_not_spiky();
     test_bar_height();
+    test_interval_round_trip();
+    test_ring_age();
+    test_triple_and_wh();
     test_formatting();
 
     printf("%d checks, %d failures\n", checks, failures);

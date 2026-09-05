@@ -3,8 +3,6 @@
 #include <flipper_format/flipper_format.h>
 #include <stdio.h>
 
-static const uint32_t pm_imp_values[] =
-    {100, 200, 320, 400, 500, 800, 1000, 1600, 2000, 3200, 10000};
 static const char* const pm_onoff_names[] = {"Off", "On"};
 static const char* const pm_scale_names[] = {"Linear", "Log"};
 static const uint32_t pm_min_values[] = {1, 2, 3, 5, 10, 20, 30, 50};
@@ -15,7 +13,7 @@ static const char* const pm_level_names[] = {"Low", "High"};
 /* VariableItemList copies the value text, but each item keeps its own buffer so
  * the code stays correct regardless. */
 static char pm_buf_pin[16];
-static char pm_buf_imp[12];
+static char pm_buf_imp[24];
 static char pm_buf_min[12];
 static char pm_buf_max[12];
 static char pm_buf_demo[12];
@@ -176,12 +174,16 @@ static void pm_on_source(VariableItem* item) {
     pm_capture_restart(app);
 }
 
-static void pm_on_imp(VariableItem* item) {
-    PowerMeter* app = variable_item_get_context(item);
-    uint8_t i = variable_item_get_current_value_index(item);
-    app->cfg.imp_per_kwh = pm_imp_values[i];
-    snprintf(pm_buf_imp, sizeof(pm_buf_imp), "%lu", (unsigned long)pm_imp_values[i]);
-    variable_item_set_current_value_text(item, pm_buf_imp);
+/* Shown as "1000 1.00Wh": meters print either imp/kWh or watt-hours per pulse,
+ * and a high-demand meter labelled "200 Wh/pulse" is 5 imp/kWh -- far outside
+ * any sensible fixed list, which is why this is a free numeric entry. */
+static VariableItem* pm_item_imp;
+
+void pm_settings_refresh_imp(PowerMeter* app) {
+    char wh[16];
+    pm_fmt_wh_per_pulse(wh, sizeof(wh), app->cfg.imp_per_kwh);
+    snprintf(pm_buf_imp, sizeof(pm_buf_imp), "%lu %s", (unsigned long)app->cfg.imp_per_kwh, wh);
+    if(pm_item_imp) variable_item_set_current_value_text(pm_item_imp, pm_buf_imp);
 }
 
 static void pm_on_pull(VariableItem* item) {
@@ -233,8 +235,14 @@ static void pm_on_demo(VariableItem* item) {
 
 #define PM_ITEM_RESET 7
 
+#define PM_ITEM_IMP 1
+
 static void pm_on_enter(void* context, uint32_t index) {
     PowerMeter* app = context;
+    if(index == PM_ITEM_IMP) {
+        view_dispatcher_send_custom_event(app->view_dispatcher, PmEventNumber);
+        return;
+    }
     if(index != PM_ITEM_RESET) return;
     pm_session_reset(app);
     notification_message(app->notifications, &sequence_success);
@@ -251,12 +259,8 @@ void pm_settings_build(PowerMeter* app) {
     pm_source_text(app, idx, pm_buf_pin, sizeof(pm_buf_pin));
     variable_item_set_current_value_text(item, pm_buf_pin);
 
-    item = variable_item_list_add(list, "Pulses/kWh", COUNT_OF(pm_imp_values), pm_on_imp, app);
-    idx = pm_index_of(pm_imp_values, COUNT_OF(pm_imp_values), app->cfg.imp_per_kwh);
-    variable_item_set_current_value_index(item, idx);
-    snprintf(pm_buf_imp, sizeof(pm_buf_imp), "%lu", (unsigned long)pm_imp_values[idx]);
-    variable_item_set_current_value_text(item, pm_buf_imp);
-    app->cfg.imp_per_kwh = pm_imp_values[idx];
+    pm_item_imp = variable_item_list_add(list, "Pulses/kWh", 1, NULL, app);
+    pm_settings_refresh_imp(app);
 
     item = variable_item_list_add(list, "Internal pull", 2, pm_on_pull, app);
     variable_item_set_current_value_index(item, app->cfg.internal_pull ? 1 : 0);

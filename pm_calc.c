@@ -36,35 +36,60 @@ static void pm_bucket_add(PmRing* r, uint32_t offset, uint32_t add) {
     *b = (v > UINT16_MAX) ? UINT16_MAX : (uint16_t)v;
 }
 
-void pm_ring_add_interval(PmRing* r, uint32_t milli, uint32_t interval_ms, uint32_t frac_ms) {
+void pm_ring_add_interval(
+    PmRing* r,
+    uint32_t milli,
+    uint32_t interval_ms,
+    uint32_t age_ms,
+    uint32_t frac_ms) {
     if(!r->primed || milli == 0) return;
     if(interval_ms == 0) {
         pm_bucket_add(r, 0, milli);
         return;
     }
 
-    /* Walk backwards in time. Bucket 0 covers the `frac_ms` elapsed so far in
-     * the current second; every older bucket covers a full second before that.
-     * Each gets milli * (its overlap with the interval) / interval_ms. */
+    /* Everything is measured as milliseconds-ago from the present moment. The
+     * interval occupies [age, age + interval]; bucket 0 covers [0, frac) and
+     * every older bucket a full second before that. Each bucket takes
+     * milli * (its overlap with the interval) / interval. */
+    const uint32_t lo = age_ms;
+    const uint32_t hi = age_ms + interval_ms;
+
     uint32_t placed = 0;
-    uint32_t prev = 0;
-    uint32_t edge = frac_ms;
+    uint32_t landed = 0;
+    bool any = false;
+    uint32_t b_lo = 0;
 
     for(uint32_t i = 0; i < r->filled; i++) {
-        uint32_t hi = edge < interval_ms ? edge : interval_ms;
-        if(hi > prev) {
-            uint32_t add = (uint32_t)(((uint64_t)milli * (hi - prev)) / interval_ms);
+        uint32_t b_hi = (i == 0) ? frac_ms : frac_ms + i * 1000;
+
+        uint32_t s = b_lo > lo ? b_lo : lo;
+        uint32_t e = b_hi < hi ? b_hi : hi;
+        if(e > s) {
+            uint32_t add = (uint32_t)(((uint64_t)milli * (e - s)) / interval_ms);
             pm_bucket_add(r, i, add);
             placed += add;
+            if(!any) {
+                landed = i;
+                any = true;
+            }
         }
-        if(edge >= interval_ms) break;
-        prev = edge;
-        edge += 1000;
+        if(b_hi >= hi) break;
+        b_lo = b_hi;
     }
 
     /* Integer division leaves a few units unplaced; keep them rather than
      * quietly losing energy on every pulse. */
-    if(placed < milli) pm_bucket_add(r, 0, milli - placed);
+    if(any && placed < milli) pm_bucket_add(r, landed, milli - placed);
+}
+
+/* Inverse of pm_watts_from_interval: what gap between pulses a given load
+ * implies. Used by the demo source to emit on an exact schedule. */
+uint32_t pm_interval_from_watts(uint32_t imp_per_kwh, uint32_t watts) {
+    if(imp_per_kwh == 0 || watts == 0) return 0;
+    uint64_t d = (uint64_t)imp_per_kwh * watts;
+    uint64_t ms = (3600000000ULL + d / 2) / d;
+    return ms > 0xFFFFFFFFULL ? 0xFFFFFFFFU : (uint32_t)ms;
 }
 
 uint32_t pm_ring_sum_at(const PmRing* r, uint32_t offset_sec, uint32_t span_sec) {
@@ -170,4 +195,46 @@ uint32_t pm_bar_height(uint32_t value, uint32_t scale, uint32_t height, bool log
     uint32_t span = pm_log2_fx(scale) - lo;
     if(span == 0) return 0;
     return (uint32_t)(((uint64_t)(pm_log2_fx(value) - lo) * height) / span);
+}
+
+/* One label, one unit, fixed field order: "277/304/517 W" beats three
+ * separately-labelled values that have to be kept from colliding. */
+void pm_fmt_triple(char* out, size_t len, uint32_t lo, uint32_t avg, uint32_t hi) {
+    if(hi < 10000) {
+        snprintf(
+            out, len, "%lu/%lu/%lu W", (unsigned long)lo, (unsigned long)avg, (unsigned long)hi);
+    } else {
+        snprintf(
+            out,
+            len,
+            "%lu.%lu/%lu.%lu/%lu.%lu kW",
+            (unsigned long)(lo / 1000),
+            (unsigned long)((lo % 1000) / 100),
+            (unsigned long)(avg / 1000),
+            (unsigned long)((avg % 1000) / 100),
+            (unsigned long)(hi / 1000),
+            (unsigned long)((hi % 1000) / 100));
+    }
+}
+
+/* Meters print either imp/kWh or Wh per pulse; showing the derived figure lets
+ * one setting serve a faceplate labelled either way. */
+void pm_fmt_wh_per_pulse(char* out, size_t len, uint32_t imp_per_kwh) {
+    if(imp_per_kwh == 0) {
+        snprintf(out, len, "-");
+        return;
+    }
+    uint32_t milli = (uint32_t)((1000000ULL + imp_per_kwh / 2) / imp_per_kwh);
+    if(milli >= 10000) {
+        snprintf(out, len, "%luWh", (unsigned long)((milli + 500) / 1000));
+    } else if(milli >= 1000) {
+        snprintf(
+            out,
+            len,
+            "%lu.%02luWh",
+            (unsigned long)(milli / 1000),
+            (unsigned long)((milli % 1000) / 10));
+    } else {
+        snprintf(out, len, "0.%03luWh", (unsigned long)milli);
+    }
 }

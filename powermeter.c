@@ -1,10 +1,23 @@
 #include "powermeter.h"
 
+static void pm_number_done(void* ctx, int32_t number) {
+    PowerMeter* app = ctx;
+    app->cfg.imp_per_kwh = (uint32_t)(number > 0 ? number : 1);
+    pm_settings_refresh_imp(app);
+    view_dispatcher_switch_to_view(app->view_dispatcher, PmViewSettings);
+}
+
 static bool pm_custom_event(void* ctx, uint32_t event) {
     PowerMeter* app = ctx;
     switch(event) {
     case PmEventSettings:
         view_dispatcher_switch_to_view(app->view_dispatcher, PmViewSettings);
+        return true;
+    case PmEventNumber:
+        number_input_set_header_text(app->number_input, "Pulses per kWh");
+        number_input_set_result_callback(
+            app->number_input, pm_number_done, app, (int32_t)app->cfg.imp_per_kwh, 1, 1000000);
+        view_dispatcher_switch_to_view(app->view_dispatcher, PmViewNumber);
         return true;
     case PmEventExit:
         view_dispatcher_stop(app->view_dispatcher);
@@ -49,6 +62,8 @@ static PowerMeter* pm_alloc(void) {
     view_set_draw_callback(app->main_view, pm_view_draw);
     view_set_input_callback(app->main_view, pm_view_input);
 
+    app->number_input = number_input_alloc();
+
     app->settings_list = variable_item_list_alloc();
     pm_settings_build(app);
     view_set_previous_callback(
@@ -57,6 +72,8 @@ static PowerMeter* pm_alloc(void) {
     view_dispatcher_add_view(app->view_dispatcher, PmViewMain, app->main_view);
     view_dispatcher_add_view(
         app->view_dispatcher, PmViewSettings, variable_item_list_get_view(app->settings_list));
+    view_dispatcher_add_view(
+        app->view_dispatcher, PmViewNumber, number_input_get_view(app->number_input));
 
     return app;
 }
@@ -67,6 +84,8 @@ static void pm_free(PowerMeter* app) {
 
     view_dispatcher_remove_view(app->view_dispatcher, PmViewMain);
     view_dispatcher_remove_view(app->view_dispatcher, PmViewSettings);
+    view_dispatcher_remove_view(app->view_dispatcher, PmViewNumber);
+    number_input_free(app->number_input);
     variable_item_list_free(app->settings_list);
     view_free(app->main_view);
     view_dispatcher_free(app->view_dispatcher);

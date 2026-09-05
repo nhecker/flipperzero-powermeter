@@ -128,28 +128,17 @@ static void pm_draw_graph(Canvas* canvas, PowerMeter* app, uint8_t index) {
     }
 
     /* min/avg/max of the columns actually plotted, so the numbers always
-     * describe this window rather than the whole ring. */
-    char lo_s[32], av_s[32], hi_s[32];
-    pm_fmt_watts(buf, sizeof(buf), low);
-    snprintf(lo_s, sizeof(lo_s), "min %s", buf);
-    pm_fmt_watts(buf, sizeof(buf), avg);
-    snprintf(av_s, sizeof(av_s), "avg %s", buf);
-    pm_fmt_watts(buf, sizeof(buf), peak);
-    snprintf(hi_s, sizeof(hi_s), "max %s", buf);
+     * describe this window rather than the whole ring. One string with a
+     * single unit: three separately positioned fields could still collide
+     * even when their total width fit. */
+    char triple[40];
+    char labelled[56];
+    pm_fmt_triple(triple, sizeof(triple), low, avg, peak);
+    snprintf(labelled, sizeof(labelled), "min/avg/max %s", triple);
 
     canvas_set_font(canvas, FontSecondary);
-    /* Drop the labels rather than let the three values collide. */
-    if(canvas_string_width(canvas, lo_s) + canvas_string_width(canvas, av_s) +
-           canvas_string_width(canvas, hi_s) + 10 >
-       128) {
-        pm_fmt_watts(lo_s, sizeof(lo_s), low);
-        pm_fmt_watts(av_s, sizeof(av_s), avg);
-        pm_fmt_watts(hi_s, sizeof(hi_s), peak);
-    }
-
-    canvas_draw_str(canvas, 0, 63, lo_s);
-    canvas_draw_str_aligned(canvas, 64, 63, AlignCenter, AlignBottom, av_s);
-    canvas_draw_str_aligned(canvas, 127, 63, AlignRight, AlignBottom, hi_s);
+    const char* stats = canvas_string_width(canvas, labelled) <= 126 ? labelled : triple;
+    canvas_draw_str_aligned(canvas, 64, 63, AlignCenter, AlignBottom, stats);
 }
 
 static void pm_draw_row(Canvas* canvas, int32_t y, const char* key, const char* val) {

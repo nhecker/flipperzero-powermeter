@@ -105,10 +105,16 @@ put a 74HC14 Schmitt inverter between the sensor and the pin and flip **Pulse le
 
 The one setting you must get right is **Pulses/kWh**. Look on the meter faceplate for
 `imp/kWh` (or `Imp/kWh`). Older meters print `Kh`, which is watt-hours per revolution
-rather than per pulse.
+rather than per pulse, and high-demand meters often print a watt-hours-per-pulse figure
+instead — 200 Wh/pulse, say, which is 5 imp/kWh.
+
+Rather than force that arithmetic on you, the setting is a free numeric entry and shows
+the derived watt-hours per pulse beside it (`1000  1.00Wh`). If your meter is labelled in
+Wh/pulse, adjust until that second figure matches the faceplate.
 
 | imp/kWh | Wh per pulse |
 | ------- | ------------ |
+| 5       | 200          |
 | 800     | 1.25         |
 | 1000    | 1.0          |
 | 1600    | 0.625        |
@@ -142,8 +148,9 @@ Pages:
 
 Graphs autoscale to a 1/2/5 ceiling shown in the header, with a dotted mid-height
 reference line. The bottom row gives min/avg/max **of the columns actually plotted**, so
-the numbers always describe that window rather than the whole ring; labels are dropped
-automatically if the three values would collide.
+the numbers always describe that window rather than the whole ring. It reads
+`min/avg/max 277/304/517 W` — one label and one unit, dropping to the bare triple when
+the labelled form will not fit.
 
 **Chart scale** switches between linear and logarithmic. Log compresses toward a 10 W
 floor, which keeps a 100 W standby load legible on the same axis as a 10 kW peak instead
