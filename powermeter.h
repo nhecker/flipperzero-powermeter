@@ -171,7 +171,7 @@ uint32_t pm_window_watts(const PowerMeter* app, uint32_t span_sec, bool* partial
 /** Newest buckets whose energy is not yet credited, because it only arrives
  *  when the pulse closing the interval lands. Excluding them keeps a slow
  *  meter from reading as a trailing run of zeros. */
-uint32_t pm_settled_offset(const PowerMeter* app);
+uint32_t pm_settled_offset(const PowerMeter* app, uint32_t window_sec);
 
 /* pm_settings.c */
 void pm_config_set_defaults(PmConfig* cfg);

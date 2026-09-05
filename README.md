@@ -78,8 +78,12 @@ callback while idle, so the pins are free in practice.
 
 Claiming an occupied line does not fail gracefully; `furi_hal_gpio_add_int_callback`
 asserts and the device resets. So at startup the app reads which EXTI lines are already
-unmasked and marks those pins **busy** in the Source list, refusing to arm them. A saved
-config naming a busy pin falls forward to the first free one rather than wedging the app.
+unmasked and **omits those pins from the Source list** — a picker offering choices that
+cannot work is a bug, not a hint, which is why the reasoning lives in this table instead.
+A saved config naming a now-unusable pin falls forward to the first free one rather than
+wedging the app.
+
+If a pin you expect is missing from Source, this table is why.
 
 This is read from the hardware rather than hardcoded, so it stays correct if a firmware
 version frees or claims a different line. Which pins are free depends on what else is

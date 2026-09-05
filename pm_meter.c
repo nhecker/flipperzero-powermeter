@@ -334,7 +334,7 @@ uint32_t pm_instant_watts(const PowerMeter* app) {
  * for up to a whole interval -- which is what made min flicker to 0 between
  * pulses. Skip them, but only up to one expected interval: beyond that, the
  * absence of pulses really is information and the zeros are the truth. */
-uint32_t pm_settled_offset(const PowerMeter* app) {
+uint32_t pm_settled_offset(const PowerMeter* app, uint32_t window_sec) {
     if(!app->have_pulse) return 0;
 
     uint32_t now = furi_get_tick();
@@ -344,12 +344,22 @@ uint32_t pm_settled_offset(const PowerMeter* app) {
     uint32_t skip = 1;
     if(age > frac) skip += (age - frac + 999) / 1000;
 
+    /* Never skip past one expected interval: beyond that the absence of pulses
+     * really is information and the zeros are the truth. */
     uint32_t expected = (app->last_interval + 999) / 1000 + 1;
-    return skip > expected ? expected : skip;
+    if(skip > expected) skip = expected;
+
+    /* And never skip a large part of the window itself. A meter slow enough
+     * that its interval dwarfs the window would otherwise leave this reporting
+     * a stale slice from before the gap under a label claiming to be recent --
+     * worse than admitting the window is mostly unknown. */
+    uint32_t cap = window_sec / 4;
+    if(cap == 0) cap = 1;
+    return skip > cap ? cap : skip;
 }
 
 uint32_t pm_window_watts(const PowerMeter* app, uint32_t span_sec, bool* partial) {
-    uint32_t skip = pm_settled_offset(app);
+    uint32_t skip = pm_settled_offset(app, span_sec);
     if(skip >= app->ring.filled) {
         if(partial) *partial = true;
         return 0;

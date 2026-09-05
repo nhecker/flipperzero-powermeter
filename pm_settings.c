@@ -134,26 +134,43 @@ void pm_config_save(PowerMeter* app) {
 
 /* The pin selector is folded into Source: naming the pin *is* naming the
  * source, and splitting them left "Source: GPIO" saying nothing about which
- * pin was actually being read. Busy pins stay listed so the reason a pin is
- * unusable is visible rather than mysterious. */
-#define PM_SRC_IR    (pm_pin_count)
-#define PM_SRC_DEMO  (pm_pin_count + 1)
-#define PM_SRC_COUNT (pm_pin_count + 2)
+ * pin was actually being read.
+ *
+ * Pins whose EXTI line the firmware owns are left out entirely rather than
+ * listed as busy. A picker that offers choices which cannot work is a bug, not
+ * a hint; why a given pin is missing belongs in the README, which carries the
+ * whole line-ownership table. */
+static uint8_t pm_usable[8];
+static uint8_t pm_usable_count;
 
-static void pm_source_text(PowerMeter* app, uint8_t idx, char* out, size_t len) {
+static void pm_usable_build(PowerMeter* app) {
+    pm_usable_count = 0;
+    for(uint8_t i = 0; i < pm_pin_count && pm_usable_count < COUNT_OF(pm_usable); i++) {
+        if(pm_pin_available(app, i)) pm_usable[pm_usable_count++] = i;
+    }
+}
+
+#define PM_SRC_IR    (pm_usable_count)
+#define PM_SRC_DEMO  (pm_usable_count + 1)
+#define PM_SRC_COUNT (pm_usable_count + 2)
+
+static void pm_source_text(uint8_t idx, char* out, size_t len) {
     if(idx == PM_SRC_IR) {
         snprintf(out, len, "IR");
     } else if(idx == PM_SRC_DEMO) {
         snprintf(out, len, "Demo");
     } else {
-        snprintf(out, len, "%s%s", pm_pins[idx].label, pm_pin_available(app, idx) ? "" : " busy");
+        snprintf(out, len, "%s", pm_pins[pm_usable[idx]].label);
     }
 }
 
 static uint8_t pm_source_index(const PowerMeter* app) {
     if(app->cfg.source == PmSourceIr) return (uint8_t)PM_SRC_IR;
     if(app->cfg.source == PmSourceDemo) return (uint8_t)PM_SRC_DEMO;
-    return app->cfg.pin_index;
+    for(uint8_t i = 0; i < pm_usable_count; i++) {
+        if(pm_usable[i] == app->cfg.pin_index) return i;
+    }
+    return 0;
 }
 
 static void pm_on_source(VariableItem* item) {
@@ -166,10 +183,10 @@ static void pm_on_source(VariableItem* item) {
         app->cfg.source = PmSourceDemo;
     } else {
         app->cfg.source = PmSourceGpio;
-        app->cfg.pin_index = i;
+        app->cfg.pin_index = pm_usable[i];
     }
 
-    pm_source_text(app, i, pm_buf_pin, sizeof(pm_buf_pin));
+    pm_source_text(i, pm_buf_pin, sizeof(pm_buf_pin));
     variable_item_set_current_value_text(item, pm_buf_pin);
     pm_capture_restart(app);
 }
@@ -253,10 +270,11 @@ void pm_settings_build(PowerMeter* app) {
     VariableItem* item;
     uint8_t idx;
 
+    pm_usable_build(app);
     idx = pm_source_index(app);
     item = variable_item_list_add(list, "Source", (uint8_t)PM_SRC_COUNT, pm_on_source, app);
     variable_item_set_current_value_index(item, idx);
-    pm_source_text(app, idx, pm_buf_pin, sizeof(pm_buf_pin));
+    pm_source_text(idx, pm_buf_pin, sizeof(pm_buf_pin));
     variable_item_set_current_value_text(item, pm_buf_pin);
 
     pm_item_imp = variable_item_list_add(list, "Pulses/kWh", 1, NULL, app);

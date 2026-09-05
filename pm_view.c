@@ -89,7 +89,8 @@ static void pm_draw_graph(Canvas* canvas, PowerMeter* app, uint8_t index) {
     uint32_t peak = 0, low = PM_WATTS_MAX, sum = 0, valid = 0;
     /* Trailing seconds whose energy has not been credited yet are excluded, so
      * the plot and its stats only describe settled data. */
-    const uint32_t skip = spec->day_ring ? 0 : pm_settled_offset(app);
+    const uint32_t skip =
+        spec->day_ring ? 0 : pm_settled_offset(app, (uint32_t)PM_GRAPH_W * spec->secs_per_px);
     const uint32_t mins = spec->secs_per_px / 60;
 
     for(uint8_t i = 0; i < PM_GRAPH_W; i++) {
