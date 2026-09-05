@@ -1,14 +1,23 @@
 #include "powermeter.h"
 
+/* EXTI callback slots are indexed by pin NUMBER, not by port, so PxN and PyN
+ * share one slot across ports. furi_hal_gpio_add_int_callback asserts the slot
+ * is free, so claiming a line the firmware already owns resets the device
+ * rather than failing softly -- the OK button alone (PH3, line 3) rules out
+ * both PC3 and PB3.
+ *
+ * Rather than hardcode a blocklist that would rot across firmware versions,
+ * pm_exti_snapshot() reads which lines are already unmasked and the UI marks
+ * those pins busy. Every ext pin stays listed; the unusable ones say so. */
 const PmPinDef pm_pins[] = {
-    {"PC3 (7)", &gpio_ext_pc3},
-    {"PA7 (2)", &gpio_ext_pa7},
-    {"PA6 (3)", &gpio_ext_pa6},
-    {"PA4 (4)", &gpio_ext_pa4},
-    {"PB3 (6)", &gpio_ext_pb3},
-    {"PB2 (5)", &gpio_ext_pb2},
-    {"PC1 (15)", &gpio_ext_pc1},
-    {"PC0 (16)", &gpio_ext_pc0},
+    {"PA4", &gpio_ext_pa4},
+    {"PA6", &gpio_ext_pa6},
+    {"PA7", &gpio_ext_pa7},
+    {"PB2", &gpio_ext_pb2},
+    {"PB3", &gpio_ext_pb3},
+    {"PC0", &gpio_ext_pc0},
+    {"PC1", &gpio_ext_pc1},
+    {"PC3", &gpio_ext_pc3},
 };
 const size_t pm_pin_count = COUNT_OF(pm_pins);
 
@@ -52,9 +61,71 @@ static void pm_gpio_isr(void* ctx) {
     c->count++;
 }
 
+/* The onboard receiver is a 38 kHz demodulator, so an unmodulated meter LED
+ * produces at most an edge transient rather than a clean mark. Count one pulse
+ * per burst of activity and use max_pulse_ms as the refractory window; the raw
+ * edge counter on the diagnostics page shows what the TSOP actually saw. */
+static void pm_ir_isr(void* ctx, bool level, uint32_t duration) {
+    PowerMeter* app = ctx;
+    PmCapture* c = &app->cap;
+
+    c->ir_edges++;
+    if(!level) return;
+    c->ir_last_us = duration;
+
+    uint32_t now = furi_get_tick();
+    if(c->count && (now - c->last_tick) < app->cfg.max_pulse_ms) {
+        c->rejected++;
+        return;
+    }
+    if(c->count) c->last_interval = now - c->last_tick;
+    c->last_tick = now;
+    c->count++;
+}
+
+static void pm_ir_timeout_isr(void* ctx) {
+    UNUSED(ctx);
+}
+
+uint8_t pm_pin_line(uint8_t index) {
+    if(index >= pm_pin_count) return 0;
+    return (uint8_t)__builtin_ctz(pm_pins[index].pin->pin);
+}
+
+/* Must run before we arm anything, or our own line reads back as taken. */
+void pm_exti_snapshot(PowerMeter* app) {
+    app->exti_taken = 0;
+    for(uint8_t line = 0; line < 16; line++) {
+        if(LL_EXTI_IsEnabledIT_0_31(1UL << line)) app->exti_taken |= 1UL << line;
+    }
+}
+
+bool pm_pin_available(const PowerMeter* app, uint8_t index) {
+    if(index >= pm_pin_count) return false;
+    return (app->exti_taken & (1UL << pm_pin_line(index))) == 0;
+}
+
 void pm_capture_start(PowerMeter* app) {
+    if(app->cfg.source == PmSourceIr) {
+        if(app->ir_armed || furi_hal_infrared_is_busy()) return;
+        furi_hal_infrared_async_rx_set_capture_isr_callback(pm_ir_isr, app);
+        furi_hal_infrared_async_rx_set_timeout_isr_callback(pm_ir_timeout_isr, app);
+        furi_hal_infrared_async_rx_start();
+        furi_hal_infrared_async_rx_set_timeout(PM_IR_TIMEOUT_US);
+        app->ir_armed = true;
+        return;
+    }
+
     if(app->gpio_armed || app->cfg.source != PmSourceGpio) return;
     if(app->cfg.pin_index >= pm_pin_count) app->cfg.pin_index = 0;
+
+    /* Arming a line the firmware owns would trip a furi_check and reset the
+     * device, so refuse and let the UI say why. */
+    if(!pm_pin_available(app, app->cfg.pin_index)) {
+        app->pin_conflict = true;
+        return;
+    }
+    app->pin_conflict = false;
 
     app->armed_pin = pm_pins[app->cfg.pin_index].pin;
     furi_hal_gpio_init(
@@ -65,6 +136,10 @@ void pm_capture_start(PowerMeter* app) {
 }
 
 void pm_capture_stop(PowerMeter* app) {
+    if(app->ir_armed) {
+        furi_hal_infrared_async_rx_stop();
+        app->ir_armed = false;
+    }
     if(!app->gpio_armed) return;
     furi_hal_gpio_disable_int_callback(app->armed_pin);
     furi_hal_gpio_remove_int_callback(app->armed_pin);
@@ -85,6 +160,8 @@ void pm_session_reset(PowerMeter* app) {
     app->cap.last_tick = 0;
     app->cap.last_interval = 0;
     app->cap.edge_pending = false;
+    app->cap.ir_edges = 0;
+    app->cap.ir_last_us = 0;
     FURI_CRITICAL_EXIT();
 
     pm_ring_reset(&app->ring);

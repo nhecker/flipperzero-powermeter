@@ -27,6 +27,10 @@ static PowerMeter* pm_alloc(void) {
     app->notifications = furi_record_open(RECORD_NOTIFICATION);
     app->storage = furi_record_open(RECORD_STORAGE);
 
+    /* Before anything of ours touches EXTI, so the snapshot sees only the
+     * lines the firmware itself owns. */
+    pm_exti_snapshot(app);
+
     pm_config_load(app);
     pm_ring_reset(&app->ring);
     app->start_tick = furi_get_tick();

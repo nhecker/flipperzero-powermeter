@@ -10,13 +10,14 @@ static const char* const pm_pull_names[] = {"Up", "Down", "None"};
 static const uint32_t pm_min_values[] = {1, 2, 3, 5, 10, 20, 30, 50};
 static const uint32_t pm_max_values[] = {50, 100, 150, 200, 250, 300, 500, 1000};
 static const uint32_t pm_demo_values[] = {100, 250, 500, 1000, 2000, 3500, 5000, 8000, 12000};
-static const char* const pm_source_names[] = {"GPIO", "Demo"};
+static const char* const pm_source_names[] = {"GPIO", "IR", "Demo"};
 static const char* const pm_onoff_names[] = {"Off", "On"};
 static const char* const pm_level_names[] = {"Low", "High"};
 static const char* const pm_backlight_names[] = {"Auto", "On"};
 
 /* VariableItemList copies the value text, but each item keeps its own buffer so
  * the code stays correct regardless. */
+static char pm_buf_pin[16];
 static char pm_buf_imp[12];
 static char pm_buf_min[12];
 static char pm_buf_max[12];
@@ -88,6 +89,16 @@ void pm_config_load(PowerMeter* app) {
 
     if(cfg->imp_per_kwh == 0) cfg->imp_per_kwh = 1000;
     if(cfg->pin_index >= pm_pin_count) cfg->pin_index = 0;
+    /* A config naming a pin the firmware now owns must not wedge the app on
+     * every launch, so fall forward to the first line that is actually free. */
+    if(!pm_pin_available(app, cfg->pin_index)) {
+        for(uint8_t i = 0; i < pm_pin_count; i++) {
+            if(pm_pin_available(app, i)) {
+                cfg->pin_index = i;
+                break;
+            }
+        }
+    }
     if(cfg->source >= PmSourceCount) cfg->source = PmSourceGpio;
     if(cfg->pull > GpioPullDown) cfg->pull = GpioPullUp;
     if(cfg->max_pulse_ms <= cfg->min_pulse_ms) {
@@ -152,11 +163,21 @@ static void pm_on_imp(VariableItem* item) {
     variable_item_set_current_value_text(item, pm_buf_imp);
 }
 
+/* "PA4 p4" when usable, "PA4 busy" when the firmware owns that EXTI line. */
+static void pm_pin_text(PowerMeter* app, uint8_t i, char* out, size_t len) {
+    if(pm_pin_available(app, i)) {
+        snprintf(out, len, "%s line%u", pm_pins[i].label, (unsigned)pm_pin_line(i));
+    } else {
+        snprintf(out, len, "%s busy", pm_pins[i].label);
+    }
+}
+
 static void pm_on_pin(VariableItem* item) {
     PowerMeter* app = variable_item_get_context(item);
     uint8_t i = variable_item_get_current_value_index(item);
-    variable_item_set_current_value_text(item, pm_pins[i].label);
     app->cfg.pin_index = i;
+    pm_pin_text(app, i, pm_buf_pin, sizeof(pm_buf_pin));
+    variable_item_set_current_value_text(item, pm_buf_pin);
     pm_capture_restart(app);
 }
 
@@ -251,7 +272,8 @@ void pm_settings_build(PowerMeter* app) {
 
     item = variable_item_list_add(list, "GPIO pin", (uint8_t)pm_pin_count, pm_on_pin, app);
     variable_item_set_current_value_index(item, app->cfg.pin_index);
-    variable_item_set_current_value_text(item, pm_pins[app->cfg.pin_index].label);
+    pm_pin_text(app, app->cfg.pin_index, pm_buf_pin, sizeof(pm_buf_pin));
+    variable_item_set_current_value_text(item, pm_buf_pin);
 
     item = variable_item_list_add(list, "Pull", COUNT_OF(pm_pull_values), pm_on_pull, app);
     idx = pm_index_of(pm_pull_values, COUNT_OF(pm_pull_values), app->cfg.pull);

@@ -5,15 +5,30 @@ live demand in watts, rolling averages, and scrolling graphs.
 
 Built against official firmware **1.4.3 / API 87.1**.
 
-## Why not the built-in IR receiver
+## Pulse sources
 
-The Flipper's onboard IR receiver is a TSOP-type demodulating module tuned to a ~38 kHz
-carrier. It has an AGC and a bandpass filter whose entire job is to throw away steady
-light so a TV remote works in a sunlit room. A utility meter's pulse LED emits an
-*unmodulated* flash, which is exactly what that filter removes.
+Three, selectable in Settings.
 
-So this app reads a **GPIO pin** instead, and you supply a photodetector. There is also a
-**Demo** source that synthesises pulses, so you can drive the UI with no hardware attached.
+**GPIO** — the reliable one. You supply a photodetector on a GPIO pin. See *Hardware*.
+
+**IR** — the onboard receiver. Worth understanding before you trust it. The Flipper's IR
+receiver is a TSOP-type demodulating module tuned to a ~38 kHz *carrier*. That figure is
+not being compared against the meter's flash rate; it is the frequency the module expects
+the light to be chopped at. Its AGC and bandpass filter exist to discard steady light so a
+remote works in a sunlit room, and a meter's pulse LED is DC-driven, so in steady state it
+is invisible to the module by design.
+
+The interesting part is the edges. A sharp illumination step is broadband and does contain
+energy at 38 kHz, and TSOPs are notorious for glitching on fast light-level changes. So the
+plausible outcome is not silence but a **transient at the start of each flash** — countable
+if it turns out to be consistent. Whether your meter's LED has fast enough edges is an
+empirical question, which is why the source exists and why there is a diagnostics page.
+
+In this mode the app counts one pulse per burst of receiver activity and uses **Max pulse**
+as a refractory window, because TSOP output on an unmodulated edge tends to chatter rather
+than produce one clean mark.
+
+**Demo** — synthesises pulses at a configurable load. Drives the whole UI with no hardware.
 
 ## Hardware
 
@@ -23,7 +38,7 @@ pull-up.
 ```
   Flipper GPIO header
 
-  pin 7  (PC3) ──────┬───────────┐
+  pin 4  (PA4) ──────┬───────────┐
                      │           │
                      │      ┌────┴────┐
               internal      │  photo- │   <- window facing the meter LED
@@ -33,13 +48,34 @@ pull-up.
   pin 8  (GND) ──────┴───────────┘
 ```
 
-Light on the phototransistor pulls PC3 low, so the defaults are **Pull = Up** and
-**Active level = Low**. Pins 7 (PC3), 8 (GND) and 9 (3V3) are adjacent on the header,
-which keeps the hookup to a single 3-wire strip if you use a powered sensor instead.
+Light on the phototransistor pulls PA4 low, so the defaults are **Pull = Up** and
+**Active level = Low**. 3V3 is on pin 9 if you use a powered sensor instead.
 
 GPIO logic is 3.3 V — don't feed 5 V logic into it. If you want an external pull-up rather
 than the internal one, 10 kΩ from pin 9 (3V3) to the signal pin is a stiffer, less
 noise-prone choice; then set **Pull = None**.
+
+### Why some pins are marked busy
+
+Not every header pin can take an interrupt. The STM32's EXTI controller has one callback
+slot per pin *number*, shared across ports — PA3, PB3, PC3 and PH3 all contend for line 3.
+The firmware claims six of those lines from boot for the buttons alone:
+
+| EXTI line | Owner            | Blocks header pin |
+| --------- | ---------------- | ----------------- |
+| 3         | OK button (PH3)  | PC3, PB3          |
+| 6         | Down button (PC6)| PA6               |
+| 7         | Expansion module (PB7) | PA7         |
+| 10–13     | Up/Left/Right/Back | —               |
+
+Claiming an occupied line does not fail gracefully; `furi_hal_gpio_add_int_callback`
+asserts and the device resets. So at startup the app reads which EXTI lines are already
+unmasked and marks those pins **busy** in the settings list, refusing to arm them. A saved
+config naming a busy pin falls forward to the first free one rather than wedging the app.
+
+This is read from the hardware rather than hardcoded, so it stays correct if a firmware
+version frees or claims a different line. Which pins are free depends on what else is
+running — check the settings list on your own device.
 
 ### Choosing a phototransistor
 
@@ -93,8 +129,15 @@ Pages:
 2. **2 min** graph, 1 s per pixel
 3. **30 min** graph, 15 s per pixel
 4. **60 min** graph, 30 s per pixel
+5. **Diag** — raw counters for bring-up: accepted pulses, rejected pulses, last interval,
+   raw IR edge count, last IR mark duration, and live pin level.
 
 Graphs autoscale to a 1/2/5 ceiling shown in the header, with a dotted half-scale line.
+
+The Diag page is the one to watch when testing the IR source. `IR edges` counts every
+transition the receiver reports, before any filtering. If it stays at zero while the meter
+is flashing, the TSOP is not reacting at all and the theory is dead. If it climbs but
+`pulses` does not track the flashes, the refractory window needs tuning.
 
 ## How the numbers are derived
 
@@ -171,6 +214,13 @@ pushed.
 
 ## Status
 
-The app compiles clean against API 87.1 and the math is unit-tested, but **it has not yet
-been run against a real meter**. Expect to tune Min/Max pulse width and Active level on
-first contact with hardware. Start in Demo mode to confirm the UI, then switch to GPIO.
+Runs on official firmware 1.4.3 (API 87.1). Verified on hardware: launches, pages render,
+Demo mode drives the display, and all eight header pins — including the four whose EXTI
+lines are contended — start without resetting the device.
+
+**Not yet validated against a real meter.** The pulse path has only been exercised with
+synthetic pulses, so expect to tune Min/Max pulse width and Active level on first contact
+with a sensor. Start in Demo mode to confirm the UI, then switch to GPIO.
+
+The Diag page and the raw IR counters are bring-up scaffolding, not permanent features;
+they should be trimmed once the pulse path is confirmed against a meter.

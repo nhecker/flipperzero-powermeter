@@ -19,6 +19,10 @@ static void pm_draw_header(Canvas* canvas, PowerMeter* app, const char* title, c
 static void pm_source_label(PowerMeter* app, char* out, size_t len) {
     if(app->cfg.source == PmSourceDemo) {
         snprintf(out, len, "DEMO");
+    } else if(app->cfg.source == PmSourceIr) {
+        snprintf(out, len, "IR");
+    } else if(app->pin_conflict) {
+        snprintf(out, len, "%s BUSY", pm_pins[app->cfg.pin_index].label);
     } else {
         snprintf(out, len, "%s", pm_pins[app->cfg.pin_index].label);
     }
@@ -115,6 +119,64 @@ static void pm_draw_graph(Canvas* canvas, PowerMeter* app, uint8_t index) {
     canvas_draw_str_aligned(canvas, 128, 63, AlignRight, AlignBottom, head);
 }
 
+static void pm_draw_row(Canvas* canvas, int32_t y, const char* key, const char* val) {
+    canvas_draw_str(canvas, 0, y, key);
+    canvas_draw_str(canvas, 54, y, val);
+}
+
+/* Bring-up aid: raw counters, so a source that produces nothing can be told
+ * apart from one whose output is being filtered away. */
+static void pm_draw_diag(Canvas* canvas, PowerMeter* app) {
+    char src[16];
+    char buf[24];
+
+    pm_source_label(app, src, sizeof(src));
+    pm_draw_header(canvas, app, "Diag", src);
+
+    FURI_CRITICAL_ENTER();
+    uint32_t rejected = app->cap.rejected;
+    uint32_t ir_edges = app->cap.ir_edges;
+    uint32_t ir_last = app->cap.ir_last_us;
+    FURI_CRITICAL_EXIT();
+
+    canvas_set_font(canvas, FontSecondary);
+
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)app->session_pulses);
+    pm_draw_row(canvas, 20, "pulses", buf);
+
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)rejected);
+    pm_draw_row(canvas, 28, "rejected", buf);
+
+    if(app->have_pulse) {
+        snprintf(buf, sizeof(buf), "%lums", (unsigned long)app->last_interval);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    pm_draw_row(canvas, 36, "interval", buf);
+
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)ir_edges);
+    pm_draw_row(canvas, 44, "IR edges", buf);
+
+    snprintf(buf, sizeof(buf), "%luus", (unsigned long)ir_last);
+    pm_draw_row(canvas, 52, "IR mark", buf);
+
+    if(app->cfg.source != PmSourceGpio) {
+        snprintf(buf, sizeof(buf), "--");
+    } else if(app->pin_conflict) {
+        snprintf(buf, sizeof(buf), "line%u BUSY", (unsigned)pm_pin_line(app->cfg.pin_index));
+    } else if(app->gpio_armed) {
+        snprintf(
+            buf,
+            sizeof(buf),
+            "%s line%u",
+            furi_hal_gpio_read(app->armed_pin) ? "HIGH" : "LOW",
+            (unsigned)pm_pin_line(app->cfg.pin_index));
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    pm_draw_row(canvas, 60, "pin", buf);
+}
+
 void pm_view_draw(Canvas* canvas, void* model) {
     PmModel* m = model;
     PowerMeter* app = m->app;
@@ -124,6 +186,8 @@ void pm_view_draw(Canvas* canvas, void* model) {
 
     if(app->page == PmPageLive) {
         pm_draw_live(canvas, app);
+    } else if(app->page == PmPageDiag) {
+        pm_draw_diag(canvas, app);
     } else {
         pm_draw_graph(canvas, app, (uint8_t)(app->page - PmPageGraphShort));
     }

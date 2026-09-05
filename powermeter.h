@@ -2,6 +2,7 @@
 
 #include <furi.h>
 #include <furi_hal.h>
+#include <furi_hal_infrared.h>
 #include <gui/gui.h>
 #include <gui/view.h>
 #include <gui/view_dispatcher.h>
@@ -12,16 +13,17 @@
 
 #include "pm_calc.h"
 
-#define PM_TICK_MS      100u
-#define PM_BLINK_MS     180u
-#define PM_GRAPH_X      4
-#define PM_GRAPH_W      120
-#define PM_GRAPH_TOP    13
-#define PM_GRAPH_BOTTOM 53
+#define PM_TICK_MS       100u
+#define PM_BLINK_MS      180u
+#define PM_IR_TIMEOUT_US 20000u
+#define PM_GRAPH_X       4
+#define PM_GRAPH_W       120
+#define PM_GRAPH_TOP     13
+#define PM_GRAPH_BOTTOM  53
 
 #define PM_CONFIG_PATH    APP_DATA_PATH("powermeter.conf")
 #define PM_CONFIG_HEADER  "PowerMeter config"
-#define PM_CONFIG_VERSION 1
+#define PM_CONFIG_VERSION 2
 
 typedef enum {
     PmViewMain,
@@ -38,11 +40,13 @@ typedef enum {
     PmPageGraphShort,
     PmPageGraphMid,
     PmPageGraphLong,
+    PmPageDiag,
     PmPageCount,
 } PmPage;
 
 typedef enum {
     PmSourceGpio,
+    PmSourceIr,
     PmSourceDemo,
     PmSourceCount,
 } PmSource;
@@ -83,6 +87,11 @@ typedef struct {
     volatile uint32_t last_interval;
     volatile uint32_t edge_tick;
     volatile bool edge_pending;
+    /* Bring-up scaffolding (see Diag page): raw receiver edges and the last
+     * mark length, so IR mode can distinguish "TSOP saw nothing" from "TSOP
+     * saw chatter and the refractory window ate it". Strip before v1.0. */
+    volatile uint32_t ir_edges;
+    volatile uint32_t ir_last_us;
 } PmCapture;
 
 typedef struct {
@@ -99,6 +108,12 @@ typedef struct {
 
     PmPage page;
     bool gpio_armed;
+    bool ir_armed;
+    bool pin_conflict;
+    /* EXTI interrupt-mask bits already set when we started, i.e. lines the
+     * firmware owns. Sampled before we arm anything so our own line never
+     * shows up here. */
+    uint32_t exti_taken;
     const GpioPin* armed_pin;
 
     uint32_t start_tick;
@@ -122,6 +137,9 @@ typedef struct {
 } PmModel;
 
 /* pm_meter.c */
+void pm_exti_snapshot(PowerMeter* app);
+bool pm_pin_available(const PowerMeter* app, uint8_t index);
+uint8_t pm_pin_line(uint8_t index);
 void pm_capture_start(PowerMeter* app);
 void pm_capture_stop(PowerMeter* app);
 void pm_capture_restart(PowerMeter* app);

@@ -8,8 +8,8 @@ App(
     fap_icon="powermeter_10px.png",
     fap_version="1.0",
     fap_author="Nick Hecker",
-    fap_weburl="https://github.com/nhhecker/flipperzero-powermeter",
-    fap_description="Counts pulse-output utility meter LEDs on a GPIO pin and shows instantaneous demand, rolling averages and graphs.",
+    fap_weburl="https://github.com/nhecker/flipperzero-powermeter",
+    fap_description="Counts pulse-output utility meter LEDs via GPIO or the onboard IR receiver and shows instantaneous demand, rolling averages and graphs.",
     sources=[
         "powermeter.c",
         "pm_calc.c",
