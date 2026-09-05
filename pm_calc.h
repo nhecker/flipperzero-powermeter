@@ -46,6 +46,25 @@ void pm_ring_add_interval(
     uint32_t frac_ms);
 
 uint32_t pm_ring_sum(const PmRing* r, uint32_t span_sec, uint32_t* used_sec);
+
+/* A day of history at one-second resolution would be 172 KB, so the long view
+ * gets its own coarse ring: one bucket per minute, filled by rolling up the
+ * second ring as each minute closes. 1440 x uint32 is under 6 KB, and holding
+ * milli-pulses keeps a 100 W load (1.67 pulses/min) from quantising to nothing
+ * the way whole pulses would. */
+#define PM_DAY_MINUTES 1440u
+
+typedef struct {
+    uint32_t bucket[PM_DAY_MINUTES];
+    uint32_t head_min;
+    uint32_t filled;
+    bool primed;
+} PmDayRing;
+
+void pm_day_reset(PmDayRing* d);
+void pm_day_advance(PmDayRing* d, uint32_t now_min);
+void pm_day_set_at(PmDayRing* d, uint32_t offset_min, uint32_t milli);
+uint32_t pm_day_sum_at(const PmDayRing* d, uint32_t offset_min, uint32_t span_min);
 uint32_t pm_ring_sum_at(const PmRing* r, uint32_t offset_sec, uint32_t span_sec);
 
 uint32_t pm_watts_from_interval(uint32_t imp_per_kwh, uint32_t interval_ms);

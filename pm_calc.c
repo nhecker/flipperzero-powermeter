@@ -238,3 +238,45 @@ void pm_fmt_wh_per_pulse(char* out, size_t len, uint32_t imp_per_kwh) {
         snprintf(out, len, "0.%03luWh", (unsigned long)milli);
     }
 }
+
+void pm_day_reset(PmDayRing* d) {
+    memset(d, 0, sizeof(*d));
+}
+
+void pm_day_advance(PmDayRing* d, uint32_t now_min) {
+    if(!d->primed) {
+        d->primed = true;
+        d->head_min = now_min;
+        d->filled = 1;
+        d->bucket[now_min % PM_DAY_MINUTES] = 0;
+        return;
+    }
+    if(now_min <= d->head_min) return;
+    if(now_min - d->head_min >= PM_DAY_MINUTES) {
+        memset(d->bucket, 0, sizeof(d->bucket));
+        d->head_min = now_min;
+        d->filled = 1;
+        return;
+    }
+    while(d->head_min < now_min) {
+        d->head_min++;
+        d->bucket[d->head_min % PM_DAY_MINUTES] = 0;
+        if(d->filled < PM_DAY_MINUTES) d->filled++;
+    }
+}
+
+void pm_day_set_at(PmDayRing* d, uint32_t offset_min, uint32_t milli) {
+    if(!d->primed || offset_min >= d->filled) return;
+    d->bucket[(d->head_min - offset_min) % PM_DAY_MINUTES] = milli;
+}
+
+uint32_t pm_day_sum_at(const PmDayRing* d, uint32_t offset_min, uint32_t span_min) {
+    if(!d->primed) return 0;
+    uint32_t sum = 0;
+    for(uint32_t i = 0; i < span_min; i++) {
+        uint32_t back = offset_min + i;
+        if(back >= d->filled) break;
+        sum += d->bucket[(d->head_min - back) % PM_DAY_MINUTES];
+    }
+    return sum;
+}

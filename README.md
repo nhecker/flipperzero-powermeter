@@ -146,7 +146,8 @@ Pages:
 2. **2 min** graph, 1 s per pixel
 3. **30 min** graph, 15 s per pixel
 4. **60 min** graph, 30 s per pixel
-5. **Diag** — raw counters for bring-up: accepted pulses, rejected pulses, last interval,
+5. **24 h** graph, 12 min per pixel
+6. **Diag** — raw counters for bring-up: accepted pulses, rejected pulses, last interval,
    raw IR edge count, last IR mark duration, and live pin level.
 
 Graphs autoscale to a 1/2/5 ceiling shown in the header, with a dotted mid-height
@@ -202,7 +203,18 @@ smeared over 4 buckets.
 Sub-pulse resolution per bucket is what the milli-pulse unit buys. Energy is preserved:
 the remainder from integer division is kept rather than dropped.
 
-History is one hour; that is the hard limit on the longest graph.
+Seconds of history are capped at one hour. A day at that resolution would be 172 KB, so
+the 24 h page has its own coarse ring: one bucket per minute, filled by rolling up the
+second ring as each minute closes. 1440 uint32 buckets is under 6 KB, and holding
+milli-pulses there matters — a 100 W load is 1.67 pulses per minute, which whole-pulse
+counting would quantise into nonsense.
+
+**Un-credited trailing time is excluded.** Because energy is credited backwards when a
+pulse closes an interval, the seconds since the last pulse hold nothing yet. Counting them
+would read as zero power for up to a full interval — visible as `min` flickering to zero
+between pulses, and a downward bias on `avg`. Those buckets are skipped, but only up to
+one expected interval: past that, the absence of pulses genuinely means the load dropped
+and the zeros are the truth.
 
 Pulses are timestamped in a GPIO interrupt on the leading edge and committed on the
 trailing edge, so the width check rejects mains-frequency flicker and contact chatter

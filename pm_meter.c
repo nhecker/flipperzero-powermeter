@@ -22,9 +22,10 @@ const PmPinDef pm_pins[] = {
 const size_t pm_pin_count = COUNT_OF(pm_pins);
 
 const PmGraphSpec pm_graphs[] = {
-    {"2 min", "2m", 1},
-    {"30 min", "30m", 15},
-    {"60 min", "60m", 30},
+    {"2 min", "2m", 1, false},
+    {"30 min", "30m", 15, false},
+    {"60 min", "60m", 30, false},
+    {"24 h", "24h", 720, true}, /* 120 columns x 12 minutes */
 };
 const size_t pm_graph_count = COUNT_OF(pm_graphs);
 
@@ -182,6 +183,8 @@ void pm_session_reset(PowerMeter* app) {
     FURI_CRITICAL_EXIT();
 
     pm_ring_reset(&app->ring);
+    pm_day_reset(&app->day);
+    app->day_primed = false;
     app->seen_count = 0;
     app->session_pulses = 0;
     app->last_interval = 0;
@@ -270,6 +273,20 @@ void pm_tick(void* ctx) {
     bool second_rolled = now_sec != app->last_draw_sec;
     pm_ring_advance(&app->ring, now_sec);
 
+    /* Roll the minute that just closed into the day ring. Offsets 1..60 are
+     * exactly that minute now that the second ring has advanced past it. */
+    uint32_t now_min = now_sec / 60;
+    if(!app->day_primed) {
+        pm_day_advance(&app->day, now_min);
+        app->day_primed = true;
+        app->last_min = now_min;
+    } else if(now_min != app->last_min) {
+        bool contiguous = (now_min == app->last_min + 1);
+        pm_day_advance(&app->day, now_min);
+        if(contiguous) pm_day_set_at(&app->day, 1, pm_ring_sum_at(&app->ring, 1, 60));
+        app->last_min = now_min;
+    }
+
     if(fresh) {
         app->blink_until = now + PM_BLINK_MS;
         pm_feedback(app);
@@ -312,9 +329,36 @@ uint32_t pm_instant_watts(const PowerMeter* app) {
     return pm_watts_from_interval(app->cfg.imp_per_kwh, interval);
 }
 
+/* Energy is credited backwards when a pulse closes an interval, so the seconds
+ * since the last pulse hold nothing yet. Counting them would read as zero power
+ * for up to a whole interval -- which is what made min flicker to 0 between
+ * pulses. Skip them, but only up to one expected interval: beyond that, the
+ * absence of pulses really is information and the zeros are the truth. */
+uint32_t pm_settled_offset(const PowerMeter* app) {
+    if(!app->have_pulse) return 0;
+
+    uint32_t now = furi_get_tick();
+    uint32_t age = now - app->last_pulse_tick;
+    uint32_t frac = now % 1000;
+
+    uint32_t skip = 1;
+    if(age > frac) skip += (age - frac + 999) / 1000;
+
+    uint32_t expected = (app->last_interval + 999) / 1000 + 1;
+    return skip > expected ? expected : skip;
+}
+
 uint32_t pm_window_watts(const PowerMeter* app, uint32_t span_sec, bool* partial) {
-    uint32_t used = 0;
-    uint32_t milli = pm_ring_sum(&app->ring, span_sec, &used);
-    if(partial) *partial = used < span_sec;
-    return pm_watts_from_milli(app->cfg.imp_per_kwh, milli, used);
+    uint32_t skip = pm_settled_offset(app);
+    if(skip >= app->ring.filled) {
+        if(partial) *partial = true;
+        return 0;
+    }
+
+    uint32_t avail = app->ring.filled - skip;
+    uint32_t n = span_sec < avail ? span_sec : avail;
+    if(partial) *partial = n < span_sec;
+    if(n == 0) return 0;
+
+    return pm_watts_from_milli(app->cfg.imp_per_kwh, pm_ring_sum_at(&app->ring, skip, n), n);
 }

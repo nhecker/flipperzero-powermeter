@@ -43,6 +43,7 @@ static int checks = 0;
     } while(0)
 
 static PmRing ring;
+static PmDayRing day;
 
 static void test_watts_from_interval(void) {
     /* 1000 imp/kWh is exactly 1 Wh per pulse; 1 Wh in 1 s is 3600 W. */
@@ -306,6 +307,43 @@ static void test_triple_and_wh(void) {
     CHECK_STR(buf, "-");
 }
 
+static void test_day_ring(void) {
+    pm_day_reset(&day);
+    CHECK_EQ(pm_day_sum_at(&day, 0, 60), 0);
+
+    pm_day_advance(&day, 100);
+    pm_day_set_at(&day, 0, 5000);
+    CHECK_EQ(pm_day_sum_at(&day, 0, 1), 5000);
+
+    pm_day_advance(&day, 101);
+    pm_day_set_at(&day, 1, 7000);
+    CHECK_EQ(pm_day_sum_at(&day, 1, 1), 7000);
+    CHECK_EQ(pm_day_sum_at(&day, 0, 2), 7000);
+
+    /* Minute buckets hold far more than a uint16 could: 12 kW is ~200 pulses
+     * per minute, i.e. 200000 milli-pulses. */
+    pm_day_reset(&day);
+    pm_day_advance(&day, 0);
+    pm_day_set_at(&day, 0, 200000);
+    CHECK_EQ(pm_day_sum_at(&day, 0, 1), 200000);
+    CHECK_EQ(pm_watts_from_milli(1000, pm_day_sum_at(&day, 0, 1), 60), 12000);
+
+    /* A full day wraps and caps rather than growing without bound. */
+    pm_day_reset(&day);
+    pm_day_advance(&day, 0);
+    for(uint32_t m = 1; m <= 2000; m++) {
+        pm_day_advance(&day, m);
+        pm_day_set_at(&day, 0, 1000);
+    }
+    CHECK_EQ(day.filled, PM_DAY_MINUTES);
+    CHECK_EQ(pm_day_sum_at(&day, 0, PM_DAY_MINUTES), PM_DAY_MINUTES * 1000);
+
+    /* Jumping past the whole window discards rather than aliasing. */
+    pm_day_advance(&day, 2000 + PM_DAY_MINUTES + 3);
+    CHECK_EQ(pm_day_sum_at(&day, 0, PM_DAY_MINUTES), 0);
+    CHECK_EQ(day.filled, 1);
+}
+
 static void test_formatting(void) {
     char buf[24];
 
@@ -352,6 +390,7 @@ int main(void) {
     test_interval_round_trip();
     test_ring_age();
     test_triple_and_wh();
+    test_day_ring();
     test_formatting();
 
     printf("%d checks, %d failures\n", checks, failures);

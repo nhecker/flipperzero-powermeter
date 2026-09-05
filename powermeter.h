@@ -43,6 +43,7 @@ typedef enum {
     PmPageGraphShort,
     PmPageGraphMid,
     PmPageGraphLong,
+    PmPageGraphDay,
     PmPageDiag,
     PmPageCount,
 } PmPage;
@@ -63,6 +64,7 @@ typedef struct {
     const char* title;
     const char* short_title;
     uint32_t secs_per_px;
+    bool day_ring; /* read the minute ring instead of the second ring */
 } PmGraphSpec;
 
 extern const PmPinDef pm_pins[];
@@ -115,6 +117,9 @@ typedef struct {
     PmConfig cfg;
     PmCapture cap;
     PmRing ring;
+    PmDayRing day;
+    uint32_t last_min;
+    bool day_primed;
 
     PmPage page;
     bool gpio_armed;
@@ -162,6 +167,11 @@ void pm_session_reset(PowerMeter* app);
 void pm_tick(void* ctx);
 uint32_t pm_instant_watts(const PowerMeter* app);
 uint32_t pm_window_watts(const PowerMeter* app, uint32_t span_sec, bool* partial);
+
+/** Newest buckets whose energy is not yet credited, because it only arrives
+ *  when the pulse closing the interval lands. Excluding them keeps a slow
+ *  meter from reading as a trailing run of zeros. */
+uint32_t pm_settled_offset(const PowerMeter* app);
 
 /* pm_settings.c */
 void pm_config_set_defaults(PmConfig* cfg);

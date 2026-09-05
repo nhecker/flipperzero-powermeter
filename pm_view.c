@@ -87,16 +87,29 @@ static void pm_draw_graph(Canvas* canvas, PowerMeter* app, uint8_t index) {
 
     uint32_t* col = app->graph_col;
     uint32_t peak = 0, low = PM_WATTS_MAX, sum = 0, valid = 0;
+    /* Trailing seconds whose energy has not been credited yet are excluded, so
+     * the plot and its stats only describe settled data. */
+    const uint32_t skip = spec->day_ring ? 0 : pm_settled_offset(app);
+    const uint32_t mins = spec->secs_per_px / 60;
 
     for(uint8_t i = 0; i < PM_GRAPH_W; i++) {
         /* Column 0 is the oldest; the newest bucket sits at the right edge.
          * Columns the history does not fully cover are left empty rather than
          * drawn as a real zero. */
-        uint32_t offset = (uint32_t)(PM_GRAPH_W - 1 - i) * spec->secs_per_px;
         col[i] = 0;
-        if(offset + spec->secs_per_px > app->ring.filled) continue;
+        uint32_t milli;
 
-        uint32_t milli = pm_ring_sum_at(&app->ring, offset, spec->secs_per_px);
+        if(spec->day_ring) {
+            uint32_t off = (uint32_t)(PM_GRAPH_W - 1 - i) * mins;
+            if(off + mins > app->day.filled) continue;
+            milli = pm_day_sum_at(&app->day, off, mins);
+        } else {
+            uint32_t off = (uint32_t)(PM_GRAPH_W - 1 - i) * spec->secs_per_px;
+            if(off < skip) continue;
+            if(off + spec->secs_per_px > app->ring.filled) continue;
+            milli = pm_ring_sum_at(&app->ring, off, spec->secs_per_px);
+        }
+
         col[i] = pm_watts_from_milli(app->cfg.imp_per_kwh, milli, spec->secs_per_px);
         if(col[i] > peak) peak = col[i];
         if(col[i] < low) low = col[i];
@@ -140,7 +153,7 @@ static void pm_draw_graph(Canvas* canvas, PowerMeter* app, uint8_t index) {
 
     canvas_set_font(canvas, FontSecondary);
     const char* stats = canvas_string_width(canvas, labelled) <= 126 ? labelled : triple;
-    canvas_draw_str_aligned(canvas, 64, 63, AlignCenter, AlignBottom, stats);
+    canvas_draw_str(canvas, 0, 63, stats);
 }
 
 static void pm_draw_row(Canvas* canvas, int32_t y, const char* key, const char* val) {
