@@ -9,7 +9,9 @@ Built against official firmware **1.4.3 / API 87.1**.
 
 Three, selectable in Settings.
 
-**GPIO** — the reliable one. You supply a photodetector on a GPIO pin. See *Hardware*.
+**GPIO** — the reliable one. You supply a photodetector on a GPIO pin. See *Hardware*. The
+pin is chosen directly in the Source setting rather than as a separate option, so what is
+being read is never ambiguous.
 
 **IR** — the onboard receiver. Worth understanding before you trust it. The Flipper's IR
 receiver is a TSOP-type demodulating module tuned to a ~38 kHz *carrier*. That figure is
@@ -48,12 +50,12 @@ pull-up.
   pin 8  (GND) ──────┴───────────┘
 ```
 
-Light on the phototransistor pulls PA4 low, so the defaults are **Pull = Up** and
-**Active level = Low**. 3V3 is on pin 9 if you use a powered sensor instead.
+Light on the phototransistor pulls PA4 low, so the defaults are **Internal pull = Up** and
+**Pulse level = Low**. 3V3 is on pin 9 if you use a powered sensor instead.
 
 GPIO logic is 3.3 V — don't feed 5 V logic into it. If you want an external pull-up rather
 than the internal one, 10 kΩ from pin 9 (3V3) to the signal pin is a stiffer, less
-noise-prone choice; then set **Pull = None**.
+noise-prone choice; then set **Internal pull = None**.
 
 ### Why some pins are marked busy
 
@@ -61,16 +63,20 @@ Not every header pin can take an interrupt. The STM32's EXTI controller has one 
 slot per pin *number*, shared across ports — PA3, PB3, PC3 and PH3 all contend for line 3.
 The firmware claims six of those lines from boot for the buttons alone:
 
-| EXTI line | Owner            | Blocks header pin |
-| --------- | ---------------- | ----------------- |
-| 3         | OK button (PH3)  | PC3, PB3          |
-| 6         | Down button (PC6)| PA6               |
-| 7         | Expansion module (PB7) | PA7         |
-| 10–13     | Up/Left/Right/Back | —               |
+| EXTI line | Owner                  | Blocks header pin |
+| --------- | ---------------------- | ----------------- |
+| 3         | OK button (PH3)        | PC3, PB3          |
+| 6         | Down button (PC6)      | PA6               |
+| 7         | Expansion module (PB7) | PA7               |
+| 10–13     | Up/Left/Right/Back     | —                 |
+
+Measured on stock 1.4.3 that leaves **PA4, PB2, PC0 and PC1** usable. Lines 0, 1 and 2 are
+shared with the IR receiver, CC1101 and NFC respectively, but none of those hold an EXTI
+callback while idle, so the pins are free in practice.
 
 Claiming an occupied line does not fail gracefully; `furi_hal_gpio_add_int_callback`
 asserts and the device resets. So at startup the app reads which EXTI lines are already
-unmasked and marks those pins **busy** in the settings list, refusing to arm them. A saved
+unmasked and marks those pins **busy** in the Source list, refusing to arm them. A saved
 config naming a busy pin falls forward to the first free one rather than wedging the app.
 
 This is read from the hardware rather than hardcoded, so it stays correct if a firmware
@@ -91,7 +97,7 @@ the meter's LED window. Ambient light rejection matters more than sensitivity.
 
 The internal pull-up is weak, so edges can be slow enough for the STM32's EXTI to fire
 twice. The pulse-width filter (Min/Max pulse) catches most of that. If it isn't enough,
-put a 74HC14 Schmitt inverter between the sensor and the pin and flip **Active level**.
+put a 74HC14 Schmitt inverter between the sensor and the pin and flip **Pulse level**.
 
 ## Configuring for your meter
 
@@ -124,8 +130,8 @@ a rating on the label is ideal.
 Pages:
 
 1. **Live** — instantaneous demand, plus 1 / 15 / 60 minute averages, pulse count and
-   session energy. A `~` after a window label means less history has accumulated than the
-   window covers, so the figure is over a shorter span.
+   session energy. Averages over a window longer than the app has been running are taken
+   over the history that exists.
 2. **2 min** graph, 1 s per pixel
 3. **30 min** graph, 15 s per pixel
 4. **60 min** graph, 30 s per pixel
@@ -154,11 +160,23 @@ instead, so a load dropping to zero decays toward zero rather than freezing at i
 value. This is the honest behaviour for a pulse meter: with no pulse, all you know is that
 demand is *below* some bound.
 
-**Averages** come from a ring of 3600 one-second pulse-count buckets (7.2 KB):
+**Averages and graphs** come from a ring of 3600 one-second buckets (7.2 KB) holding
+milli-pulses:
 
 ```
-W = 3600000 * pulses / (imp_per_kwh * seconds)
+W = 3600 * milli_pulses / (imp_per_kwh * seconds)
 ```
+
+A pulse is not credited to the second it arrived in. It means "one quantum of energy has
+flowed since the previous pulse", so it is spread back across the seconds its interval
+overlaps, weighted by how much of each second it covers. Without that, a 1 kW load on a
+1000 imp/kWh meter — one pulse every 3.6 s — draws as a 3600 W spike between zeros on the
+1 s/px graph instead of a level 1 kW. Spreading over whole seconds instead of milliseconds
+is not good enough either: it reads 900 W for a true 1 kW, because 3.6 s of energy gets
+smeared over 4 buckets.
+
+Sub-pulse resolution per bucket is what the milli-pulse unit buys. Energy is preserved:
+the remainder from integer division is kept rather than dropped.
 
 History is one hour; that is the hard limit on the longest graph.
 
@@ -219,7 +237,7 @@ Demo mode drives the display, and all eight header pins — including the four w
 lines are contended — start without resetting the device.
 
 **Not yet validated against a real meter.** The pulse path has only been exercised with
-synthetic pulses, so expect to tune Min/Max pulse width and Active level on first contact
+synthetic pulses, so expect to tune Min/Max pulse width and Pulse level on first contact
 with a sensor. Start in Demo mode to confirm the UI, then switch to GPIO.
 
 The Diag page and the raw IR counters are bring-up scaffolding, not permanent features;

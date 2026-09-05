@@ -94,7 +94,7 @@ static void pm_ir_timeout_isr(void* ctx) {
     UNUSED(ctx);
 }
 
-uint8_t pm_pin_line(uint8_t index) {
+static uint8_t pm_pin_line(uint8_t index) {
     if(index >= pm_pin_count) return 0;
     return (uint8_t)__builtin_ctz(pm_pins[index].pin->pin);
 }

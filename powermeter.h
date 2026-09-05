@@ -137,7 +137,6 @@ typedef struct {
 /* pm_meter.c */
 void pm_exti_snapshot(PowerMeter* app);
 bool pm_pin_available(const PowerMeter* app, uint8_t index);
-uint8_t pm_pin_line(uint8_t index);
 void pm_capture_start(PowerMeter* app);
 void pm_capture_stop(PowerMeter* app);
 void pm_capture_restart(PowerMeter* app);

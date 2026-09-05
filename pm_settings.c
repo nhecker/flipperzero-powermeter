@@ -10,7 +10,6 @@ static const char* const pm_pull_names[] = {"Up", "Down", "None"};
 static const uint32_t pm_min_values[] = {1, 2, 3, 5, 10, 20, 30, 50};
 static const uint32_t pm_max_values[] = {50, 100, 150, 200, 250, 300, 500, 1000};
 static const uint32_t pm_demo_values[] = {100, 250, 500, 1000, 2000, 3500, 5000, 8000, 12000};
-static const char* const pm_source_names[] = {"GPIO", "IR", "Demo"};
 static const char* const pm_level_names[] = {"Low", "High"};
 
 /* VariableItemList copies the value text, but each item keeps its own buffer so
@@ -132,13 +131,46 @@ void pm_config_save(PowerMeter* app) {
     flipper_format_free(ff);
 }
 
+/* The pin selector is folded into Source: naming the pin *is* naming the
+ * source, and splitting them left "Source: GPIO" saying nothing about which
+ * pin was actually being read. Busy pins stay listed so the reason a pin is
+ * unusable is visible rather than mysterious. */
+#define PM_SRC_IR    (pm_pin_count)
+#define PM_SRC_DEMO  (pm_pin_count + 1)
+#define PM_SRC_COUNT (pm_pin_count + 2)
+
+static void pm_source_text(PowerMeter* app, uint8_t idx, char* out, size_t len) {
+    if(idx == PM_SRC_IR) {
+        snprintf(out, len, "IR");
+    } else if(idx == PM_SRC_DEMO) {
+        snprintf(out, len, "Demo");
+    } else {
+        snprintf(out, len, "%s%s", pm_pins[idx].label, pm_pin_available(app, idx) ? "" : " busy");
+    }
+}
+
+static uint8_t pm_source_index(const PowerMeter* app) {
+    if(app->cfg.source == PmSourceIr) return (uint8_t)PM_SRC_IR;
+    if(app->cfg.source == PmSourceDemo) return (uint8_t)PM_SRC_DEMO;
+    return app->cfg.pin_index;
+}
+
 static void pm_on_source(VariableItem* item) {
     PowerMeter* app = variable_item_get_context(item);
     uint8_t i = variable_item_get_current_value_index(item);
-    variable_item_set_current_value_text(item, pm_source_names[i]);
-    app->cfg.source = i;
-    pm_capture_stop(app);
-    pm_capture_start(app);
+
+    if(i == PM_SRC_IR) {
+        app->cfg.source = PmSourceIr;
+    } else if(i == PM_SRC_DEMO) {
+        app->cfg.source = PmSourceDemo;
+    } else {
+        app->cfg.source = PmSourceGpio;
+        app->cfg.pin_index = i;
+    }
+
+    pm_source_text(app, i, pm_buf_pin, sizeof(pm_buf_pin));
+    variable_item_set_current_value_text(item, pm_buf_pin);
+    pm_capture_restart(app);
 }
 
 static void pm_on_imp(VariableItem* item) {
@@ -147,24 +179,6 @@ static void pm_on_imp(VariableItem* item) {
     app->cfg.imp_per_kwh = pm_imp_values[i];
     snprintf(pm_buf_imp, sizeof(pm_buf_imp), "%lu", (unsigned long)pm_imp_values[i]);
     variable_item_set_current_value_text(item, pm_buf_imp);
-}
-
-/* "PA4 line4" when usable, "PA4 busy" when the firmware owns that line. */
-static void pm_pin_text(PowerMeter* app, uint8_t i, char* out, size_t len) {
-    if(pm_pin_available(app, i)) {
-        snprintf(out, len, "%s line%u", pm_pins[i].label, (unsigned)pm_pin_line(i));
-    } else {
-        snprintf(out, len, "%s busy", pm_pins[i].label);
-    }
-}
-
-static void pm_on_pin(VariableItem* item) {
-    PowerMeter* app = variable_item_get_context(item);
-    uint8_t i = variable_item_get_current_value_index(item);
-    app->cfg.pin_index = i;
-    pm_pin_text(app, i, pm_buf_pin, sizeof(pm_buf_pin));
-    variable_item_set_current_value_text(item, pm_buf_pin);
-    pm_capture_restart(app);
 }
 
 static void pm_on_pull(VariableItem* item) {
@@ -206,7 +220,7 @@ static void pm_on_demo(VariableItem* item) {
     variable_item_set_current_value_text(item, pm_buf_demo);
 }
 
-#define PM_ITEM_RESET 7
+#define PM_ITEM_RESET 6
 
 static void pm_on_enter(void* context, uint32_t index) {
     PowerMeter* app = context;
@@ -220,9 +234,11 @@ void pm_settings_build(PowerMeter* app) {
     VariableItem* item;
     uint8_t idx;
 
-    item = variable_item_list_add(list, "Source", PmSourceCount, pm_on_source, app);
-    variable_item_set_current_value_index(item, app->cfg.source);
-    variable_item_set_current_value_text(item, pm_source_names[app->cfg.source]);
+    idx = pm_source_index(app);
+    item = variable_item_list_add(list, "Source", (uint8_t)PM_SRC_COUNT, pm_on_source, app);
+    variable_item_set_current_value_index(item, idx);
+    pm_source_text(app, idx, pm_buf_pin, sizeof(pm_buf_pin));
+    variable_item_set_current_value_text(item, pm_buf_pin);
 
     item = variable_item_list_add(list, "Pulses/kWh", COUNT_OF(pm_imp_values), pm_on_imp, app);
     idx = pm_index_of(pm_imp_values, COUNT_OF(pm_imp_values), app->cfg.imp_per_kwh);
@@ -230,11 +246,6 @@ void pm_settings_build(PowerMeter* app) {
     snprintf(pm_buf_imp, sizeof(pm_buf_imp), "%lu", (unsigned long)pm_imp_values[idx]);
     variable_item_set_current_value_text(item, pm_buf_imp);
     app->cfg.imp_per_kwh = pm_imp_values[idx];
-
-    item = variable_item_list_add(list, "GPIO pin", (uint8_t)pm_pin_count, pm_on_pin, app);
-    variable_item_set_current_value_index(item, app->cfg.pin_index);
-    pm_pin_text(app, app->cfg.pin_index, pm_buf_pin, sizeof(pm_buf_pin));
-    variable_item_set_current_value_text(item, pm_buf_pin);
 
     item =
         variable_item_list_add(list, "Internal pull", COUNT_OF(pm_pull_values), pm_on_pull, app);
