@@ -226,6 +226,35 @@ static void test_steady_load_is_not_spiky(void) {
     CHECK(avg > 950 && avg < 1050);
 }
 
+/* Regression for a per-pulse spike: rounding each bucket down and parking the
+ * leftover in one of them put a visible tooth in the 1 s/px plot once per
+ * pulse. At ~370 W the interval is ~9.7 s, so the leftover was a tenth of a
+ * bucket's true share -- small in energy, obvious on screen, and it inflated
+ * max. Every settled bucket should now sit within a percent of the true load. */
+static void test_no_per_pulse_spike(void) {
+    const uint32_t interval = 9730; /* ~370 W at 1000 imp/kWh */
+    pm_ring_reset(&ring);
+    pm_ring_advance(&ring, 0);
+
+    uint32_t ms = 0;
+    for(uint32_t pulse = 0; pulse < 400; pulse++) {
+        ms += interval;
+        pm_ring_advance(&ring, ms / 1000);
+        pm_ring_add_interval(&ring, PM_MILLI, interval, 0, ms % 1000);
+    }
+
+    uint32_t hi = 0, lo = PM_WATTS_MAX;
+    for(uint32_t i = 12; i < 240; i++) {
+        uint32_t w = pm_watts_from_milli(1000, pm_ring_sum_at(&ring, i, 1), 1);
+        if(w > hi) hi = w;
+        if(w < lo) lo = w;
+    }
+    CHECK(lo > 366);
+    CHECK(hi < 374);
+    /* Which also means max is not reading high off a rounding artefact. */
+    CHECK(hi - lo < 8);
+}
+
 static void test_bar_height(void) {
     /* Linear is a plain proportion, and the top of the scale fills the plot. */
     CHECK_EQ(pm_bar_height(0, 1000, 40, false), 0);
@@ -386,6 +415,7 @@ int main(void) {
     test_ring_saturation();
     test_ring_interval();
     test_steady_load_is_not_spiky();
+    test_no_per_pulse_spike();
     test_bar_height();
     test_interval_round_trip();
     test_ring_age();

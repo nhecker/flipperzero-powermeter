@@ -55,32 +55,30 @@ void pm_ring_add_interval(
     const uint32_t lo = age_ms;
     const uint32_t hi = age_ms + interval_ms;
 
+    /* Deposit the difference between successive *cumulative* shares rather
+     * than rounding each bucket independently. Rounding each one down and
+     * dumping the leftover somewhere put a visible spike in one bucket per
+     * pulse; carrying the cumulative total keeps every bucket within one unit
+     * of its true share, and the final bucket lands on exactly `milli` so no
+     * energy is invented or lost. */
     uint32_t placed = 0;
-    uint32_t landed = 0;
-    bool any = false;
-    uint32_t b_lo = 0;
 
     for(uint32_t i = 0; i < r->filled; i++) {
         uint32_t b_hi = (i == 0) ? frac_ms : frac_ms + i * 1000;
 
-        uint32_t s = b_lo > lo ? b_lo : lo;
         uint32_t e = b_hi < hi ? b_hi : hi;
-        if(e > s) {
-            uint32_t add = (uint32_t)(((uint64_t)milli * (e - s)) / interval_ms);
-            pm_bucket_add(r, i, add);
-            placed += add;
-            if(!any) {
-                landed = i;
-                any = true;
+        if(e > lo) {
+            uint32_t cum = (uint32_t)(((uint64_t)milli * (e - lo)) / interval_ms);
+            if(cum > placed) {
+                pm_bucket_add(r, i, cum - placed);
+                placed = cum;
             }
         }
         if(b_hi >= hi) break;
-        b_lo = b_hi;
     }
-
-    /* Integer division leaves a few units unplaced; keep them rather than
-     * quietly losing energy on every pulse. */
-    if(any && placed < milli) pm_bucket_add(r, landed, milli - placed);
+    /* If the ring ran out before the interval did, the remainder belongs to
+     * time we no longer keep. Dropping it is correct; parking it in a bucket
+     * would be the spike all over again. */
 }
 
 /* Inverse of pm_watts_from_interval: what gap between pulses a given load
