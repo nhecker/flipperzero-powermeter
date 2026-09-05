@@ -11,9 +11,7 @@ static const uint32_t pm_min_values[] = {1, 2, 3, 5, 10, 20, 30, 50};
 static const uint32_t pm_max_values[] = {50, 100, 150, 200, 250, 300, 500, 1000};
 static const uint32_t pm_demo_values[] = {100, 250, 500, 1000, 2000, 3500, 5000, 8000, 12000};
 static const char* const pm_source_names[] = {"GPIO", "IR", "Demo"};
-static const char* const pm_onoff_names[] = {"Off", "On"};
 static const char* const pm_level_names[] = {"Low", "High"};
-static const char* const pm_backlight_names[] = {"Auto", "On"};
 
 /* VariableItemList copies the value text, but each item keeps its own buffer so
  * the code stays correct regardless. */
@@ -38,9 +36,6 @@ void pm_config_set_defaults(PmConfig* cfg) {
     cfg->min_pulse_ms = 3;
     cfg->max_pulse_ms = 250;
     cfg->source = PmSourceGpio;
-    cfg->led_feedback = true;
-    cfg->beep_feedback = false;
-    cfg->backlight_on = false;
     cfg->demo_watts = 1000;
 }
 
@@ -79,9 +74,6 @@ void pm_config_load(PowerMeter* app) {
         cfg->source = (uint8_t)pm_read_u32(ff, "source", cfg->source);
         cfg->demo_watts = pm_read_u32(ff, "demo_watts", cfg->demo_watts);
         cfg->active_high = pm_read_bool(ff, "active_high", cfg->active_high);
-        cfg->led_feedback = pm_read_bool(ff, "led_feedback", cfg->led_feedback);
-        cfg->beep_feedback = pm_read_bool(ff, "beep_feedback", cfg->beep_feedback);
-        cfg->backlight_on = pm_read_bool(ff, "backlight_on", cfg->backlight_on);
     } while(false);
 
     furi_string_free(type);
@@ -135,12 +127,6 @@ void pm_config_save(PowerMeter* app) {
         bool b;
         b = cfg->active_high;
         flipper_format_write_bool(ff, "active_high", &b, 1);
-        b = cfg->led_feedback;
-        flipper_format_write_bool(ff, "led_feedback", &b, 1);
-        b = cfg->beep_feedback;
-        flipper_format_write_bool(ff, "beep_feedback", &b, 1);
-        b = cfg->backlight_on;
-        flipper_format_write_bool(ff, "backlight_on", &b, 1);
     } while(false);
 
     flipper_format_free(ff);
@@ -163,7 +149,7 @@ static void pm_on_imp(VariableItem* item) {
     variable_item_set_current_value_text(item, pm_buf_imp);
 }
 
-/* "PA4 p4" when usable, "PA4 busy" when the firmware owns that EXTI line. */
+/* "PA4 line4" when usable, "PA4 busy" when the firmware owns that line. */
 static void pm_pin_text(PowerMeter* app, uint8_t i, char* out, size_t len) {
     if(pm_pin_available(app, i)) {
         snprintf(out, len, "%s line%u", pm_pins[i].label, (unsigned)pm_pin_line(i));
@@ -212,31 +198,6 @@ static void pm_on_max(VariableItem* item) {
     variable_item_set_current_value_text(item, pm_buf_max);
 }
 
-static void pm_on_led(VariableItem* item) {
-    PowerMeter* app = variable_item_get_context(item);
-    uint8_t i = variable_item_get_current_value_index(item);
-    variable_item_set_current_value_text(item, pm_onoff_names[i]);
-    app->cfg.led_feedback = (i == 1);
-}
-
-static void pm_on_beep(VariableItem* item) {
-    PowerMeter* app = variable_item_get_context(item);
-    uint8_t i = variable_item_get_current_value_index(item);
-    variable_item_set_current_value_text(item, pm_onoff_names[i]);
-    app->cfg.beep_feedback = (i == 1);
-}
-
-static void pm_on_backlight(VariableItem* item) {
-    PowerMeter* app = variable_item_get_context(item);
-    uint8_t i = variable_item_get_current_value_index(item);
-    variable_item_set_current_value_text(item, pm_backlight_names[i]);
-    app->cfg.backlight_on = (i == 1);
-    notification_message(
-        app->notifications,
-        app->cfg.backlight_on ? &sequence_display_backlight_enforce_on :
-                                &sequence_display_backlight_enforce_auto);
-}
-
 static void pm_on_demo(VariableItem* item) {
     PowerMeter* app = variable_item_get_context(item);
     uint8_t i = variable_item_get_current_value_index(item);
@@ -245,7 +206,7 @@ static void pm_on_demo(VariableItem* item) {
     variable_item_set_current_value_text(item, pm_buf_demo);
 }
 
-#define PM_ITEM_RESET 10
+#define PM_ITEM_RESET 7
 
 static void pm_on_enter(void* context, uint32_t index) {
     PowerMeter* app = context;
@@ -275,12 +236,13 @@ void pm_settings_build(PowerMeter* app) {
     pm_pin_text(app, app->cfg.pin_index, pm_buf_pin, sizeof(pm_buf_pin));
     variable_item_set_current_value_text(item, pm_buf_pin);
 
-    item = variable_item_list_add(list, "Pull", COUNT_OF(pm_pull_values), pm_on_pull, app);
+    item =
+        variable_item_list_add(list, "Internal pull", COUNT_OF(pm_pull_values), pm_on_pull, app);
     idx = pm_index_of(pm_pull_values, COUNT_OF(pm_pull_values), app->cfg.pull);
     variable_item_set_current_value_index(item, idx);
     variable_item_set_current_value_text(item, pm_pull_names[idx]);
 
-    item = variable_item_list_add(list, "Active level", 2, pm_on_level, app);
+    item = variable_item_list_add(list, "Pulse level", 2, pm_on_level, app);
     variable_item_set_current_value_index(item, app->cfg.active_high ? 1 : 0);
     variable_item_set_current_value_text(item, pm_level_names[app->cfg.active_high ? 1 : 0]);
 
@@ -297,18 +259,6 @@ void pm_settings_build(PowerMeter* app) {
     snprintf(pm_buf_max, sizeof(pm_buf_max), "%lums", (unsigned long)pm_max_values[idx]);
     variable_item_set_current_value_text(item, pm_buf_max);
     app->cfg.max_pulse_ms = (uint16_t)pm_max_values[idx];
-
-    item = variable_item_list_add(list, "LED blink", 2, pm_on_led, app);
-    variable_item_set_current_value_index(item, app->cfg.led_feedback ? 1 : 0);
-    variable_item_set_current_value_text(item, pm_onoff_names[app->cfg.led_feedback ? 1 : 0]);
-
-    item = variable_item_list_add(list, "Beep", 2, pm_on_beep, app);
-    variable_item_set_current_value_index(item, app->cfg.beep_feedback ? 1 : 0);
-    variable_item_set_current_value_text(item, pm_onoff_names[app->cfg.beep_feedback ? 1 : 0]);
-
-    item = variable_item_list_add(list, "Backlight", 2, pm_on_backlight, app);
-    variable_item_set_current_value_index(item, app->cfg.backlight_on ? 1 : 0);
-    variable_item_set_current_value_text(item, pm_backlight_names[app->cfg.backlight_on ? 1 : 0]);
 
     item = variable_item_list_add(list, "Reset stats", 1, NULL, app);
     variable_item_set_current_value_text(item, "OK");

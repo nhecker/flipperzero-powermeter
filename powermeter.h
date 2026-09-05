@@ -73,9 +73,6 @@ typedef struct {
     uint16_t min_pulse_ms;
     uint16_t max_pulse_ms;
     uint8_t source;
-    bool led_feedback;
-    bool beep_feedback;
-    bool backlight_on;
     uint32_t demo_watts;
 } PmConfig;
 
@@ -123,6 +120,7 @@ typedef struct {
     uint32_t last_pulse_tick;
     bool have_pulse;
     uint32_t blink_until;
+    uint32_t last_draw_sec;
 
     uint32_t demo_accum;
     uint32_t rng;

@@ -29,11 +29,42 @@ void pm_ring_advance(PmRing* r, uint32_t now_sec) {
     }
 }
 
-void pm_ring_add(PmRing* r, uint32_t pulses) {
-    if(!r->primed || pulses == 0) return;
-    uint16_t* b = &r->bucket[r->head_sec % PM_RING_SECONDS];
-    uint32_t v = (uint32_t)*b + pulses;
+static void pm_bucket_add(PmRing* r, uint32_t offset, uint32_t add) {
+    if(add == 0 || offset >= r->filled) return;
+    uint16_t* b = &r->bucket[(r->head_sec - offset) % PM_RING_SECONDS];
+    uint32_t v = (uint32_t)*b + add;
     *b = (v > UINT16_MAX) ? UINT16_MAX : (uint16_t)v;
+}
+
+void pm_ring_add_interval(PmRing* r, uint32_t milli, uint32_t interval_ms, uint32_t frac_ms) {
+    if(!r->primed || milli == 0) return;
+    if(interval_ms == 0) {
+        pm_bucket_add(r, 0, milli);
+        return;
+    }
+
+    /* Walk backwards in time. Bucket 0 covers the `frac_ms` elapsed so far in
+     * the current second; every older bucket covers a full second before that.
+     * Each gets milli * (its overlap with the interval) / interval_ms. */
+    uint32_t placed = 0;
+    uint32_t prev = 0;
+    uint32_t edge = frac_ms;
+
+    for(uint32_t i = 0; i < r->filled; i++) {
+        uint32_t hi = edge < interval_ms ? edge : interval_ms;
+        if(hi > prev) {
+            uint32_t add = (uint32_t)(((uint64_t)milli * (hi - prev)) / interval_ms);
+            pm_bucket_add(r, i, add);
+            placed += add;
+        }
+        if(edge >= interval_ms) break;
+        prev = edge;
+        edge += 1000;
+    }
+
+    /* Integer division leaves a few units unplaced; keep them rather than
+     * quietly losing energy on every pulse. */
+    if(placed < milli) pm_bucket_add(r, 0, milli - placed);
 }
 
 uint32_t pm_ring_sum_at(const PmRing* r, uint32_t offset_sec, uint32_t span_sec) {
@@ -62,10 +93,10 @@ uint32_t pm_watts_from_interval(uint32_t imp_per_kwh, uint32_t interval_ms) {
     return w > PM_WATTS_MAX ? PM_WATTS_MAX : (uint32_t)w;
 }
 
-uint32_t pm_watts_from_pulses(uint32_t imp_per_kwh, uint32_t pulses, uint32_t seconds) {
+uint32_t pm_watts_from_milli(uint32_t imp_per_kwh, uint32_t milli, uint32_t seconds) {
     if(imp_per_kwh == 0 || seconds == 0) return 0;
     uint64_t d = (uint64_t)imp_per_kwh * seconds;
-    uint64_t w = (3600000ULL * pulses + d / 2) / d;
+    uint64_t w = (3600ULL * milli + d / 2) / d;
     return w > PM_WATTS_MAX ? PM_WATTS_MAX : (uint32_t)w;
 }
 

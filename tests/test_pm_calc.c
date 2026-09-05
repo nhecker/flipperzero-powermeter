@@ -60,14 +60,14 @@ static void test_watts_from_interval(void) {
 }
 
 static void test_watts_from_pulses(void) {
-    CHECK_EQ(pm_watts_from_pulses(1000, 60, 60), 3600);
-    CHECK_EQ(pm_watts_from_pulses(1000, 1, 3600), 1);
-    CHECK_EQ(pm_watts_from_pulses(800, 100, 600), 750);
-    CHECK_EQ(pm_watts_from_pulses(1000, 0, 60), 0);
-    CHECK_EQ(pm_watts_from_pulses(1000, 60, 0), 0);
-    CHECK_EQ(pm_watts_from_pulses(0, 60, 60), 0);
+    CHECK_EQ(pm_watts_from_milli(1000, 60000, 60), 3600);
+    CHECK_EQ(pm_watts_from_milli(1000, 1000, 3600), 1);
+    CHECK_EQ(pm_watts_from_milli(800, 100000, 600), 750);
+    CHECK_EQ(pm_watts_from_milli(1000, 0, 60), 0);
+    CHECK_EQ(pm_watts_from_milli(1000, 60000, 0), 0);
+    CHECK_EQ(pm_watts_from_milli(0, 60000, 60), 0);
     /* A full hour at 1 pulse/s on a 1 Wh meter is 3600 W. */
-    CHECK_EQ(pm_watts_from_pulses(1000, 3600, 3600), 3600);
+    CHECK_EQ(pm_watts_from_milli(1000, 3600000, 3600), 3600);
 }
 
 static void test_nice_ceiling(void) {
@@ -90,30 +90,30 @@ static void test_ring_basics(void) {
     CHECK_EQ(pm_ring_sum(&ring, 60, &used), 0);
     CHECK_EQ(used, 0);
     /* Adding before the ring is primed must be a no-op, not a stray write. */
-    pm_ring_add(&ring, 7);
+    pm_ring_add_interval(&ring, 7000, 0, 0);
     CHECK_EQ(pm_ring_sum(&ring, 60, &used), 0);
 
     pm_ring_advance(&ring, 100);
-    pm_ring_add(&ring, 5);
-    CHECK_EQ(pm_ring_sum(&ring, 60, &used), 5);
+    pm_ring_add_interval(&ring, 5000, 0, 0);
+    CHECK_EQ(pm_ring_sum(&ring, 60, &used), 5000);
     CHECK_EQ(used, 1);
 
     pm_ring_advance(&ring, 101);
-    pm_ring_add(&ring, 3);
-    CHECK_EQ(pm_ring_sum(&ring, 60, &used), 8);
+    pm_ring_add_interval(&ring, 3000, 0, 0);
+    CHECK_EQ(pm_ring_sum(&ring, 60, &used), 8000);
     CHECK_EQ(used, 2);
 
     /* Newest bucket first: offset 0 is the second we are still filling. */
-    CHECK_EQ(pm_ring_sum_at(&ring, 0, 1), 3);
-    CHECK_EQ(pm_ring_sum_at(&ring, 1, 1), 5);
+    CHECK_EQ(pm_ring_sum_at(&ring, 0, 1), 3000);
+    CHECK_EQ(pm_ring_sum_at(&ring, 1, 1), 5000);
     CHECK_EQ(pm_ring_sum_at(&ring, 2, 1), 0);
 
     /* A ten second gap zero-fills rather than smearing the old value. */
     pm_ring_advance(&ring, 111);
-    CHECK_EQ(pm_ring_sum(&ring, 60, &used), 8);
+    CHECK_EQ(pm_ring_sum(&ring, 60, &used), 8000);
     CHECK_EQ(used, 12);
     CHECK_EQ(pm_ring_sum_at(&ring, 0, 1), 0);
-    CHECK_EQ(pm_ring_sum_at(&ring, 10, 1), 3);
+    CHECK_EQ(pm_ring_sum_at(&ring, 10, 1), 3000);
 }
 
 static void test_ring_wrap(void) {
@@ -122,26 +122,26 @@ static void test_ring_wrap(void) {
 
     for(uint32_t s = 1; s <= 5000; s++) {
         pm_ring_advance(&ring, s);
-        pm_ring_add(&ring, 1);
+        pm_ring_add_interval(&ring, 1000, 0, 0);
     }
 
     uint32_t used = 0;
     /* History is capped at one hour even after 5000 s of input. */
-    CHECK_EQ(pm_ring_sum(&ring, PM_RING_SECONDS, &used), PM_RING_SECONDS);
+    CHECK_EQ(pm_ring_sum(&ring, PM_RING_SECONDS, &used), PM_RING_SECONDS * PM_MILLI);
     CHECK_EQ(used, PM_RING_SECONDS);
-    CHECK_EQ(pm_ring_sum(&ring, 60, &used), 60);
+    CHECK_EQ(pm_ring_sum(&ring, 60, &used), 60000);
     CHECK_EQ(used, 60);
     /* Asking for more than we keep clamps to what we have. */
-    CHECK_EQ(pm_ring_sum(&ring, 99999, &used), PM_RING_SECONDS);
+    CHECK_EQ(pm_ring_sum(&ring, 99999, &used), PM_RING_SECONDS * PM_MILLI);
     CHECK_EQ(used, PM_RING_SECONDS);
     /* One pulse per second on a 1 Wh meter is 3600 W. */
-    CHECK_EQ(pm_watts_from_pulses(1000, pm_ring_sum(&ring, 60, NULL), 60), 3600);
+    CHECK_EQ(pm_watts_from_milli(1000, pm_ring_sum(&ring, 60, NULL), 60), 3600);
 }
 
 static void test_ring_stale_jump(void) {
     pm_ring_reset(&ring);
     pm_ring_advance(&ring, 10);
-    pm_ring_add(&ring, 42);
+    pm_ring_add_interval(&ring, 42000, 0, 0);
 
     /* Jumping past the whole window discards everything instead of aliasing. */
     pm_ring_advance(&ring, 10 + PM_RING_SECONDS + 5);
@@ -149,16 +149,80 @@ static void test_ring_stale_jump(void) {
     CHECK_EQ(pm_ring_sum(&ring, PM_RING_SECONDS, &used), 0);
     CHECK_EQ(used, 1);
 
-    pm_ring_add(&ring, 2);
-    CHECK_EQ(pm_ring_sum(&ring, PM_RING_SECONDS, NULL), 2);
+    pm_ring_add_interval(&ring, 2000, 0, 0);
+    CHECK_EQ(pm_ring_sum(&ring, PM_RING_SECONDS, NULL), 2000);
 }
 
 static void test_ring_saturation(void) {
     pm_ring_reset(&ring);
     pm_ring_advance(&ring, 1);
-    pm_ring_add(&ring, 60000);
-    pm_ring_add(&ring, 60000);
+    pm_ring_add_interval(&ring, 60000, 0, 0);
+    pm_ring_add_interval(&ring, 60000, 0, 0);
     CHECK_EQ(pm_ring_sum_at(&ring, 0, 1), 65535);
+}
+
+static void test_ring_interval(void) {
+    pm_ring_reset(&ring);
+    pm_ring_advance(&ring, 0);
+    for(uint32_t s = 1; s <= 10; s++) {
+        pm_ring_advance(&ring, s);
+    }
+
+    /* 2 s interval landing exactly on a second boundary: one full second into
+     * the previous bucket, nothing into the partial current one. */
+    pm_ring_add_interval(&ring, 1000, 2000, 0);
+    CHECK_EQ(pm_ring_sum(&ring, 60, NULL), 1000);
+    CHECK_EQ(pm_ring_sum_at(&ring, 1, 1), 500);
+    CHECK_EQ(pm_ring_sum_at(&ring, 2, 1), 500);
+
+    /* Energy is conserved whatever the alignment. */
+    for(uint32_t frac = 0; frac < 1000; frac += 137) {
+        pm_ring_reset(&ring);
+        pm_ring_advance(&ring, 0);
+        for(uint32_t s = 1; s <= 20; s++) {
+            pm_ring_advance(&ring, s);
+        }
+        pm_ring_add_interval(&ring, 1000, 3600, frac);
+        CHECK_EQ(pm_ring_sum(&ring, 60, NULL), 1000);
+    }
+
+    /* An interval longer than the retained history must not corrupt the ring. */
+    pm_ring_reset(&ring);
+    pm_ring_advance(&ring, 0);
+    pm_ring_advance(&ring, 1);
+    pm_ring_add_interval(&ring, 1000, 9999999, 0);
+    CHECK(pm_ring_sum(&ring, PM_RING_SECONDS, NULL) <= 1000);
+}
+
+/* The regression this whole milli-pulse scheme exists for: a steady 1 kW load
+ * on a 1000 imp/kWh meter pulses every 3.6 s. Bucketing each pulse into its
+ * arrival second read as a 3600 W spike between zeros; spreading it across the
+ * interval should read as a level ~1 kW. */
+static void test_steady_load_is_not_spiky(void) {
+    pm_ring_reset(&ring);
+    pm_ring_advance(&ring, 0);
+
+    uint32_t ms = 0;
+    for(uint32_t pulse = 0; pulse < 200; pulse++) {
+        ms += 3600;
+        pm_ring_advance(&ring, ms / 1000);
+        pm_ring_add_interval(&ring, PM_MILLI, 3600, ms % 1000);
+    }
+
+    /* Every individual second in the settled middle should read near 1 kW,
+     * rather than alternating between 3600 W and 0 W. */
+    uint32_t hi = 0, lo = PM_WATTS_MAX;
+    for(uint32_t i = 5; i < 60; i++) {
+        uint32_t w = pm_watts_from_milli(1000, pm_ring_sum_at(&ring, i, 1), 1);
+        if(w > hi) hi = w;
+        if(w < lo) lo = w;
+    }
+    CHECK(lo > 850);
+    CHECK(hi < 1150);
+
+    /* And the one-minute average lands on the true load. */
+    uint32_t avg = pm_watts_from_milli(1000, pm_ring_sum(&ring, 60, NULL), 60);
+    CHECK(avg > 950 && avg < 1050);
 }
 
 static void test_formatting(void) {
@@ -198,6 +262,8 @@ int main(void) {
     test_ring_wrap();
     test_ring_stale_jump();
     test_ring_saturation();
+    test_ring_interval();
+    test_steady_load_is_not_spiky();
     test_formatting();
 
     printf("%d checks, %d failures\n", checks, failures);

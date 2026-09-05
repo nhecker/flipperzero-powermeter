@@ -27,10 +27,17 @@ const PmGraphSpec pm_graphs[] = {
     {"60 min", 30},
 };
 
-static const NotificationSequence pm_seq_beep = {
+/* One blip per pulse. Every element is gated by the user's own system settings
+ * -- LED brightness, speaker volume, vibro enable -- so there is nothing here
+ * for the app to duplicate as its own toggles. */
+static const NotificationSequence pm_seq_pulse = {
+    &message_green_255,
+    &message_vibro_on,
     &message_note_c5,
     &message_delay_10,
     &message_sound_off,
+    &message_vibro_off,
+    &message_green_0,
     NULL,
 };
 
@@ -199,8 +206,7 @@ static uint32_t pm_demo_pulses(PowerMeter* app) {
 }
 
 static void pm_feedback(PowerMeter* app) {
-    if(app->cfg.led_feedback) notification_message(app->notifications, &sequence_blink_green_10);
-    if(app->cfg.beep_feedback) notification_message(app->notifications, &pm_seq_beep);
+    notification_message(app->notifications, &pm_seq_pulse);
 }
 
 void pm_tick(void* ctx) {
@@ -233,15 +239,26 @@ void pm_tick(void* ctx) {
         }
     }
 
-    pm_ring_advance(&app->ring, now / 1000);
+    uint32_t now_sec = now / 1000;
+    bool second_rolled = now_sec != app->last_draw_sec;
+    pm_ring_advance(&app->ring, now_sec);
+
     if(fresh) {
-        pm_ring_add(&app->ring, fresh);
+        /* Attribute the energy to the interval it flowed over, not to the
+         * instant the pulse landed, so a slow meter reads as a level load
+         * instead of a comb of spikes. */
+        pm_ring_add_interval(&app->ring, fresh * PM_MILLI, app->last_interval, now % 1000);
         app->session_pulses += fresh;
         app->blink_until = now + PM_BLINK_MS;
         pm_feedback(app);
     }
 
-    pm_view_refresh(app);
+    /* Nothing on screen changes faster than once a second except the pulse
+     * blip, so there is no reason to repaint at tick rate. */
+    if(fresh || second_rolled) {
+        app->last_draw_sec = now_sec;
+        pm_view_refresh(app);
+    }
 }
 
 /* Fall back to the elapsed-since-last-pulse interval once it exceeds the last
@@ -255,7 +272,7 @@ uint32_t pm_instant_watts(const PowerMeter* app) {
 
 uint32_t pm_window_watts(const PowerMeter* app, uint32_t span_sec, bool* partial) {
     uint32_t used = 0;
-    uint32_t pulses = pm_ring_sum(&app->ring, span_sec, &used);
+    uint32_t milli = pm_ring_sum(&app->ring, span_sec, &used);
     if(partial) *partial = used < span_sec;
-    return pm_watts_from_pulses(app->cfg.imp_per_kwh, pulses, used);
+    return pm_watts_from_milli(app->cfg.imp_per_kwh, milli, used);
 }

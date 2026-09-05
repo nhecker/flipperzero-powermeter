@@ -65,8 +65,6 @@ static void pm_free(PowerMeter* app) {
     pm_capture_stop(app);
     pm_config_save(app);
 
-    notification_message(app->notifications, &sequence_display_backlight_enforce_auto);
-
     view_dispatcher_remove_view(app->view_dispatcher, PmViewMain);
     view_dispatcher_remove_view(app->view_dispatcher, PmViewSettings);
     variable_item_list_free(app->settings_list);
@@ -83,9 +81,6 @@ int32_t powermeter_app(void* p) {
     UNUSED(p);
     PowerMeter* app = pm_alloc();
 
-    if(app->cfg.backlight_on) {
-        notification_message(app->notifications, &sequence_display_backlight_enforce_on);
-    }
     pm_capture_start(app);
 
     view_dispatcher_attach_to_gui(app->view_dispatcher, app->gui, ViewDispatcherTypeFullscreen);

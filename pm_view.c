@@ -28,10 +28,19 @@ static void pm_source_label(PowerMeter* app, char* out, size_t len) {
     }
 }
 
+/* Left column keys share a value offset so the numbers line up; right column
+ * values are flushed to the screen edge for the same reason. */
 static void pm_draw_pair(Canvas* canvas, int32_t x, int32_t y, const char* key, const char* val) {
     canvas_set_font(canvas, FontSecondary);
     canvas_draw_str(canvas, x, y, key);
     canvas_draw_str(canvas, x + 22, y, val);
+}
+
+static void
+    pm_draw_pair_r(Canvas* canvas, int32_t x, int32_t y, const char* key, const char* val) {
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str(canvas, x, y, key);
+    canvas_draw_str_aligned(canvas, 127, y, AlignRight, AlignBottom, val);
 }
 
 static void pm_draw_live(Canvas* canvas, PowerMeter* app) {
@@ -48,18 +57,17 @@ static void pm_draw_live(Canvas* canvas, PowerMeter* app) {
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_str(canvas, 108, 33, "W");
 
-    bool partial = false;
-    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, 60, &partial));
-    pm_draw_pair(canvas, 0, 45, partial ? "1m~" : "1m", buf);
+    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, 60, NULL));
+    pm_draw_pair(canvas, 0, 45, "1m", buf);
 
-    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, 900, &partial));
-    pm_draw_pair(canvas, 64, 45, partial ? "15m~" : "15m", buf);
+    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, 900, NULL));
+    pm_draw_pair_r(canvas, 64, 45, "15m", buf);
 
-    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, 3600, &partial));
-    pm_draw_pair(canvas, 0, 54, partial ? "60m~" : "60m", buf);
+    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, 3600, NULL));
+    pm_draw_pair(canvas, 0, 54, "60m", buf);
 
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)app->session_pulses);
-    pm_draw_pair(canvas, 64, 54, "n", buf);
+    pm_draw_pair_r(canvas, 64, 54, "Pulses", buf);
 
     char kwh[16];
     char hms[16];
@@ -80,8 +88,8 @@ static void pm_draw_graph(Canvas* canvas, PowerMeter* app, uint8_t index) {
     for(uint8_t i = 0; i < PM_GRAPH_W; i++) {
         /* Column 0 is the oldest; the newest bucket sits at the right edge. */
         uint32_t offset = (uint32_t)(PM_GRAPH_W - 1 - i) * spec->secs_per_px;
-        uint32_t pulses = pm_ring_sum_at(&app->ring, offset, spec->secs_per_px);
-        col[i] = pm_watts_from_pulses(app->cfg.imp_per_kwh, pulses, spec->secs_per_px);
+        uint32_t milli = pm_ring_sum_at(&app->ring, offset, spec->secs_per_px);
+        col[i] = pm_watts_from_milli(app->cfg.imp_per_kwh, milli, spec->secs_per_px);
         if(col[i] > peak) peak = col[i];
     }
 
@@ -160,21 +168,23 @@ static void pm_draw_diag(Canvas* canvas, PowerMeter* app) {
     snprintf(buf, sizeof(buf), "%luus", (unsigned long)ir_last);
     pm_draw_row(canvas, 52, "IR mark", buf);
 
-    if(app->cfg.source != PmSourceGpio) {
-        snprintf(buf, sizeof(buf), "--");
+    if(app->cfg.source == PmSourceIr) {
+        snprintf(buf, sizeof(buf), "IR");
+    } else if(app->cfg.source == PmSourceDemo) {
+        snprintf(buf, sizeof(buf), "Demo %luW", (unsigned long)app->cfg.demo_watts);
     } else if(app->pin_conflict) {
-        snprintf(buf, sizeof(buf), "line%u BUSY", (unsigned)pm_pin_line(app->cfg.pin_index));
+        snprintf(buf, sizeof(buf), "%s busy", pm_pins[app->cfg.pin_index].label);
     } else if(app->gpio_armed) {
         snprintf(
             buf,
             sizeof(buf),
-            "%s line%u",
-            furi_hal_gpio_read(app->armed_pin) ? "HIGH" : "LOW",
-            (unsigned)pm_pin_line(app->cfg.pin_index));
+            "%s %s",
+            pm_pins[app->cfg.pin_index].label,
+            furi_hal_gpio_read(app->armed_pin) ? "HIGH" : "LOW");
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    pm_draw_row(canvas, 60, "pin", buf);
+    pm_draw_row(canvas, 60, "source", buf);
 }
 
 void pm_view_draw(Canvas* canvas, void* model) {
