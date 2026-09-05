@@ -7,6 +7,7 @@
 #define PM_RING_SECONDS 3600u
 #define PM_WATTS_MAX    999999u
 #define PM_MILLI        1000u
+#define PM_LOG_FLOOR    10u
 
 /* One-second buckets covering the last hour, holding milli-pulses rather than
  * whole pulses.
@@ -44,6 +45,11 @@ uint32_t pm_ring_sum_at(const PmRing* r, uint32_t offset_sec, uint32_t span_sec)
 uint32_t pm_watts_from_interval(uint32_t imp_per_kwh, uint32_t interval_ms);
 uint32_t pm_watts_from_milli(uint32_t imp_per_kwh, uint32_t milli, uint32_t seconds);
 uint32_t pm_nice_ceiling(uint32_t value);
+
+/** Bar height in pixels. Log mode compresses toward PM_LOG_FLOOR watts, below
+ *  which a value draws as nothing. */
+uint32_t pm_log2_fx(uint32_t v);
+uint32_t pm_bar_height(uint32_t value, uint32_t scale, uint32_t height, bool log_scale);
 
 void pm_fmt_watts(char* out, size_t len, uint32_t watts);
 void pm_fmt_kwh(char* out, size_t len, uint32_t imp_per_kwh, uint32_t pulses);

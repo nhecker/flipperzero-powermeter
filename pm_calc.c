@@ -134,13 +134,40 @@ void pm_fmt_kwh(char* out, size_t len, uint32_t imp_per_kwh, uint32_t pulses) {
     snprintf(out, len, "%lu.%03lu", (unsigned long)(milli / 1000), (unsigned long)(milli % 1000));
 }
 
+/* Unit suffixes rather than colons: 1h02m03s cannot be misread as a day and
+ * two hours the way 1:02:03 can. Hours are dropped entirely below one. */
 void pm_fmt_hms(char* out, size_t len, uint32_t seconds) {
     unsigned long h = seconds / 3600;
     unsigned long m = (seconds / 60) % 60;
     unsigned long s = seconds % 60;
     if(h) {
-        snprintf(out, len, "%lu:%02lu:%02lu", h, m, s);
+        snprintf(out, len, "%luh%02lum%02lus", h, m, s);
     } else {
-        snprintf(out, len, "%lu:%02lu", m, s);
+        snprintf(out, len, "%lum%02lus", m, s);
     }
+}
+
+/* log2 in 8.8 fixed point, linearly interpolating the mantissa. Peak error is
+ * ~0.09 of an octave, which is under a pixel on a 41 px plot -- cheaper and
+ * more predictable here than pulling in libm. */
+uint32_t pm_log2_fx(uint32_t v) {
+    if(v == 0) return 0;
+    uint32_t b = 31u - (uint32_t)__builtin_clz(v);
+    uint32_t norm = (uint32_t)(((uint64_t)v << 16) >> b); /* 1.0..2.0 in 16.16 */
+    return (b << 8) | ((norm - 65536u) >> 8);
+}
+
+uint32_t pm_bar_height(uint32_t value, uint32_t scale, uint32_t height, bool log_scale) {
+    if(scale == 0 || height == 0 || value == 0) return 0;
+    if(value > scale) value = scale;
+
+    if(!log_scale) {
+        return (uint32_t)(((uint64_t)value * height) / scale);
+    }
+    if(scale <= PM_LOG_FLOOR || value <= PM_LOG_FLOOR) return 0;
+
+    uint32_t lo = pm_log2_fx(PM_LOG_FLOOR);
+    uint32_t span = pm_log2_fx(scale) - lo;
+    if(span == 0) return 0;
+    return (uint32_t)(((uint64_t)(pm_log2_fx(value) - lo) * height) / span);
 }

@@ -134,9 +134,13 @@ void pm_capture_start(PowerMeter* app) {
     }
     app->pin_conflict = false;
 
+    /* The pull has to hold the line at the opposite rail from the pulse, or
+     * the sensor has nothing to pull against and no edge is ever produced. */
+    GpioPull pull = GpioPullNo;
+    if(app->cfg.internal_pull) pull = app->cfg.active_high ? GpioPullDown : GpioPullUp;
+
     app->armed_pin = pm_pins[app->cfg.pin_index].pin;
-    furi_hal_gpio_init(
-        app->armed_pin, GpioModeInterruptRiseFall, (GpioPull)app->cfg.pull, GpioSpeedVeryHigh);
+    furi_hal_gpio_init(app->armed_pin, GpioModeInterruptRiseFall, pull, GpioSpeedVeryHigh);
     furi_hal_gpio_add_int_callback(app->armed_pin, pm_gpio_isr, app);
     furi_hal_gpio_enable_int_callback(app->armed_pin);
     app->gpio_armed = true;
@@ -217,9 +221,11 @@ void pm_tick(void* ctx) {
     if(app->cfg.source == PmSourceDemo) {
         fresh = pm_demo_pulses(app);
         if(fresh) {
-            uint32_t gap = app->have_pulse ? (now - app->last_pulse_tick) : PM_TICK_MS;
-            app->last_interval = gap / fresh;
-            if(app->last_interval == 0) app->last_interval = 1;
+            if(app->have_pulse) {
+                uint32_t gap = now - app->last_pulse_tick;
+                app->last_interval = gap / fresh;
+                if(app->last_interval == 0) app->last_interval = 1;
+            }
             app->last_pulse_tick = now;
             app->have_pulse = true;
         }
@@ -244,13 +250,21 @@ void pm_tick(void* ctx) {
     pm_ring_advance(&app->ring, now_sec);
 
     if(fresh) {
+        app->blink_until = now + PM_BLINK_MS;
+        pm_feedback(app);
+    }
+
+    /* The very first pulse only establishes a baseline timestamp. Its energy
+     * accrued over an interval that began before we were watching, so counting
+     * it would invent a reading out of an unknown duration -- which is what
+     * made the first bar on the graph shoot to the top. last_interval stays 0
+     * until a second pulse gives it a real one. */
+    if(fresh && app->last_interval) {
         /* Attribute the energy to the interval it flowed over, not to the
          * instant the pulse landed, so a slow meter reads as a level load
          * instead of a comb of spikes. */
         pm_ring_add_interval(&app->ring, fresh * PM_MILLI, app->last_interval, now % 1000);
         app->session_pulses += fresh;
-        app->blink_until = now + PM_BLINK_MS;
-        pm_feedback(app);
     }
 
     /* Nothing on screen changes faster than once a second except the pulse

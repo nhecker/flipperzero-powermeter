@@ -84,18 +84,29 @@ static void pm_draw_graph(Canvas* canvas, PowerMeter* app, uint8_t index) {
     char head[48];
 
     uint32_t* col = app->graph_col;
-    uint32_t peak = 0;
+    uint32_t peak = 0, low = PM_WATTS_MAX, sum = 0, valid = 0;
+
     for(uint8_t i = 0; i < PM_GRAPH_W; i++) {
-        /* Column 0 is the oldest; the newest bucket sits at the right edge. */
+        /* Column 0 is the oldest; the newest bucket sits at the right edge.
+         * Columns the history does not fully cover are left empty rather than
+         * drawn as a real zero. */
         uint32_t offset = (uint32_t)(PM_GRAPH_W - 1 - i) * spec->secs_per_px;
+        col[i] = 0;
+        if(offset + spec->secs_per_px > app->ring.filled) continue;
+
         uint32_t milli = pm_ring_sum_at(&app->ring, offset, spec->secs_per_px);
         col[i] = pm_watts_from_milli(app->cfg.imp_per_kwh, milli, spec->secs_per_px);
         if(col[i] > peak) peak = col[i];
+        if(col[i] < low) low = col[i];
+        sum += col[i];
+        valid++;
     }
+    if(!valid) low = 0;
+    uint32_t avg = valid ? sum / valid : 0;
 
     uint32_t scale = pm_nice_ceiling(peak < 100 ? 100 : peak);
     pm_fmt_watts(buf, sizeof(buf), scale);
-    snprintf(head, sizeof(head), "max %s", buf);
+    snprintf(head, sizeof(head), "%s%s", app->cfg.log_scale ? "log " : "", buf);
     pm_draw_header(canvas, app, spec->title, head);
 
     const int32_t base = PM_GRAPH_BOTTOM;
@@ -110,21 +121,35 @@ static void pm_draw_graph(Canvas* canvas, PowerMeter* app, uint8_t index) {
 
     for(uint8_t i = 0; i < PM_GRAPH_W; i++) {
         if(col[i] == 0) continue;
-        uint32_t h = (uint32_t)(((uint64_t)col[i] * height) / scale);
+        uint32_t h = pm_bar_height(col[i], scale, (uint32_t)height, app->cfg.log_scale);
         if(h == 0) h = 1;
         if(h > (uint32_t)height) h = height;
         canvas_draw_line(canvas, PM_GRAPH_X + i, base - h, PM_GRAPH_X + i, base - 1);
     }
 
-    canvas_set_font(canvas, FontSecondary);
-    pm_fmt_watts(buf, sizeof(buf), pm_instant_watts(app));
-    snprintf(head, sizeof(head), "now %s", buf);
-    canvas_draw_str(canvas, 0, 63, head);
+    /* min/avg/max of the columns actually plotted, so the numbers always
+     * describe this window rather than the whole ring. */
+    char lo_s[32], av_s[32], hi_s[32];
+    pm_fmt_watts(buf, sizeof(buf), low);
+    snprintf(lo_s, sizeof(lo_s), "min %s", buf);
+    pm_fmt_watts(buf, sizeof(buf), avg);
+    snprintf(av_s, sizeof(av_s), "avg %s", buf);
+    pm_fmt_watts(buf, sizeof(buf), peak);
+    snprintf(hi_s, sizeof(hi_s), "max %s", buf);
 
-    uint32_t span = (uint32_t)PM_GRAPH_W * spec->secs_per_px;
-    pm_fmt_watts(buf, sizeof(buf), pm_window_watts(app, span, NULL));
-    snprintf(head, sizeof(head), "avg %s", buf);
-    canvas_draw_str_aligned(canvas, 128, 63, AlignRight, AlignBottom, head);
+    canvas_set_font(canvas, FontSecondary);
+    /* Drop the labels rather than let the three values collide. */
+    if(canvas_string_width(canvas, lo_s) + canvas_string_width(canvas, av_s) +
+           canvas_string_width(canvas, hi_s) + 10 >
+       128) {
+        pm_fmt_watts(lo_s, sizeof(lo_s), low);
+        pm_fmt_watts(av_s, sizeof(av_s), avg);
+        pm_fmt_watts(hi_s, sizeof(hi_s), peak);
+    }
+
+    canvas_draw_str(canvas, 0, 63, lo_s);
+    canvas_draw_str_aligned(canvas, 64, 63, AlignCenter, AlignBottom, av_s);
+    canvas_draw_str_aligned(canvas, 127, 63, AlignRight, AlignBottom, hi_s);
 }
 
 static void pm_draw_row(Canvas* canvas, int32_t y, const char* key, const char* val) {

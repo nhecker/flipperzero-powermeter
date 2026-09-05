@@ -5,8 +5,8 @@
 
 static const uint32_t pm_imp_values[] =
     {100, 200, 320, 400, 500, 800, 1000, 1600, 2000, 3200, 10000};
-static const uint32_t pm_pull_values[] = {GpioPullUp, GpioPullDown, GpioPullNo};
-static const char* const pm_pull_names[] = {"Up", "Down", "None"};
+static const char* const pm_onoff_names[] = {"Off", "On"};
+static const char* const pm_scale_names[] = {"Linear", "Log"};
 static const uint32_t pm_min_values[] = {1, 2, 3, 5, 10, 20, 30, 50};
 static const uint32_t pm_max_values[] = {50, 100, 150, 200, 250, 300, 500, 1000};
 static const uint32_t pm_demo_values[] = {100, 250, 500, 1000, 2000, 3500, 5000, 8000, 12000};
@@ -30,12 +30,13 @@ static uint8_t pm_index_of(const uint32_t* values, size_t count, uint32_t needle
 void pm_config_set_defaults(PmConfig* cfg) {
     cfg->imp_per_kwh = 1000;
     cfg->pin_index = 0;
-    cfg->pull = GpioPullUp;
+    cfg->internal_pull = true;
     cfg->active_high = false;
     cfg->min_pulse_ms = 3;
     cfg->max_pulse_ms = 250;
     cfg->source = PmSourceGpio;
     cfg->demo_watts = 1000;
+    cfg->log_scale = false;
 }
 
 static uint32_t pm_read_u32(FlipperFormat* ff, const char* key, uint32_t fallback) {
@@ -67,12 +68,13 @@ void pm_config_load(PowerMeter* app) {
 
         cfg->imp_per_kwh = pm_read_u32(ff, "imp_per_kwh", cfg->imp_per_kwh);
         cfg->pin_index = (uint8_t)pm_read_u32(ff, "pin_index", cfg->pin_index);
-        cfg->pull = (uint8_t)pm_read_u32(ff, "pull", cfg->pull);
         cfg->min_pulse_ms = (uint16_t)pm_read_u32(ff, "min_pulse_ms", cfg->min_pulse_ms);
         cfg->max_pulse_ms = (uint16_t)pm_read_u32(ff, "max_pulse_ms", cfg->max_pulse_ms);
         cfg->source = (uint8_t)pm_read_u32(ff, "source", cfg->source);
         cfg->demo_watts = pm_read_u32(ff, "demo_watts", cfg->demo_watts);
         cfg->active_high = pm_read_bool(ff, "active_high", cfg->active_high);
+        cfg->internal_pull = pm_read_bool(ff, "internal_pull", cfg->internal_pull);
+        cfg->log_scale = pm_read_bool(ff, "log_scale", cfg->log_scale);
     } while(false);
 
     furi_string_free(type);
@@ -91,7 +93,6 @@ void pm_config_load(PowerMeter* app) {
         }
     }
     if(cfg->source >= PmSourceCount) cfg->source = PmSourceGpio;
-    if(cfg->pull > GpioPullDown) cfg->pull = GpioPullUp;
     if(cfg->max_pulse_ms <= cfg->min_pulse_ms) {
         cfg->min_pulse_ms = 3;
         cfg->max_pulse_ms = 250;
@@ -112,8 +113,6 @@ void pm_config_save(PowerMeter* app) {
         flipper_format_write_uint32(ff, "imp_per_kwh", &v, 1);
         v = cfg->pin_index;
         flipper_format_write_uint32(ff, "pin_index", &v, 1);
-        v = cfg->pull;
-        flipper_format_write_uint32(ff, "pull", &v, 1);
         v = cfg->min_pulse_ms;
         flipper_format_write_uint32(ff, "min_pulse_ms", &v, 1);
         v = cfg->max_pulse_ms;
@@ -126,6 +125,10 @@ void pm_config_save(PowerMeter* app) {
         bool b;
         b = cfg->active_high;
         flipper_format_write_bool(ff, "active_high", &b, 1);
+        b = cfg->internal_pull;
+        flipper_format_write_bool(ff, "internal_pull", &b, 1);
+        b = cfg->log_scale;
+        flipper_format_write_bool(ff, "log_scale", &b, 1);
     } while(false);
 
     flipper_format_free(ff);
@@ -184,8 +187,8 @@ static void pm_on_imp(VariableItem* item) {
 static void pm_on_pull(VariableItem* item) {
     PowerMeter* app = variable_item_get_context(item);
     uint8_t i = variable_item_get_current_value_index(item);
-    variable_item_set_current_value_text(item, pm_pull_names[i]);
-    app->cfg.pull = (uint8_t)pm_pull_values[i];
+    variable_item_set_current_value_text(item, pm_onoff_names[i]);
+    app->cfg.internal_pull = (i == 1);
     pm_capture_restart(app);
 }
 
@@ -194,6 +197,14 @@ static void pm_on_level(VariableItem* item) {
     uint8_t i = variable_item_get_current_value_index(item);
     variable_item_set_current_value_text(item, pm_level_names[i]);
     app->cfg.active_high = (i == 1);
+    pm_capture_restart(app);
+}
+
+static void pm_on_scale(VariableItem* item) {
+    PowerMeter* app = variable_item_get_context(item);
+    uint8_t i = variable_item_get_current_value_index(item);
+    variable_item_set_current_value_text(item, pm_scale_names[i]);
+    app->cfg.log_scale = (i == 1);
 }
 
 static void pm_on_min(VariableItem* item) {
@@ -220,7 +231,7 @@ static void pm_on_demo(VariableItem* item) {
     variable_item_set_current_value_text(item, pm_buf_demo);
 }
 
-#define PM_ITEM_RESET 6
+#define PM_ITEM_RESET 7
 
 static void pm_on_enter(void* context, uint32_t index) {
     PowerMeter* app = context;
@@ -247,15 +258,17 @@ void pm_settings_build(PowerMeter* app) {
     variable_item_set_current_value_text(item, pm_buf_imp);
     app->cfg.imp_per_kwh = pm_imp_values[idx];
 
-    item =
-        variable_item_list_add(list, "Internal pull", COUNT_OF(pm_pull_values), pm_on_pull, app);
-    idx = pm_index_of(pm_pull_values, COUNT_OF(pm_pull_values), app->cfg.pull);
-    variable_item_set_current_value_index(item, idx);
-    variable_item_set_current_value_text(item, pm_pull_names[idx]);
+    item = variable_item_list_add(list, "Internal pull", 2, pm_on_pull, app);
+    variable_item_set_current_value_index(item, app->cfg.internal_pull ? 1 : 0);
+    variable_item_set_current_value_text(item, pm_onoff_names[app->cfg.internal_pull ? 1 : 0]);
 
     item = variable_item_list_add(list, "Pulse level", 2, pm_on_level, app);
     variable_item_set_current_value_index(item, app->cfg.active_high ? 1 : 0);
     variable_item_set_current_value_text(item, pm_level_names[app->cfg.active_high ? 1 : 0]);
+
+    item = variable_item_list_add(list, "Chart scale", 2, pm_on_scale, app);
+    variable_item_set_current_value_index(item, app->cfg.log_scale ? 1 : 0);
+    variable_item_set_current_value_text(item, pm_scale_names[app->cfg.log_scale ? 1 : 0]);
 
     item = variable_item_list_add(list, "Min pulse", COUNT_OF(pm_min_values), pm_on_min, app);
     idx = pm_index_of(pm_min_values, COUNT_OF(pm_min_values), app->cfg.min_pulse_ms);

@@ -50,12 +50,14 @@ pull-up.
   pin 8  (GND) ──────┴───────────┘
 ```
 
-Light on the phototransistor pulls PA4 low, so the defaults are **Internal pull = Up** and
-**Pulse level = Low**. 3V3 is on pin 9 if you use a powered sensor instead.
+Light on the phototransistor pulls PA4 low, so the defaults are **Internal pull = On** and
+**Pulse level = Low**. The pull direction is not a separate setting: it has to oppose the
+pulse level or the sensor has nothing to pull against, so it is derived from Pulse level
+and the only choice is whether to use it at all. 3V3 is on pin 9 if you use a powered sensor instead.
 
 GPIO logic is 3.3 V — don't feed 5 V logic into it. If you want an external pull-up rather
 than the internal one, 10 kΩ from pin 9 (3V3) to the signal pin is a stiffer, less
-noise-prone choice; then set **Internal pull = None**.
+noise-prone choice; then set **Internal pull = Off**.
 
 ### Why some pins are marked busy
 
@@ -138,7 +140,14 @@ Pages:
 5. **Diag** — raw counters for bring-up: accepted pulses, rejected pulses, last interval,
    raw IR edge count, last IR mark duration, and live pin level.
 
-Graphs autoscale to a 1/2/5 ceiling shown in the header, with a dotted half-scale line.
+Graphs autoscale to a 1/2/5 ceiling shown in the header, with a dotted mid-height
+reference line. The bottom row gives min/avg/max **of the columns actually plotted**, so
+the numbers always describe that window rather than the whole ring; labels are dropped
+automatically if the three values would collide.
+
+**Chart scale** switches between linear and logarithmic. Log compresses toward a 10 W
+floor, which keeps a 100 W standby load legible on the same axis as a 10 kW peak instead
+of flattening it against the baseline. Values below the floor draw as nothing.
 
 The Diag page is the one to watch when testing the IR source. `IR edges` counts every
 transition the receiver reports, before any filtering. If it stays at zero while the meter
@@ -159,6 +168,11 @@ Once the time since the last pulse exceeds that interval, the elapsed time is su
 instead, so a load dropping to zero decays toward zero rather than freezing at its last
 value. This is the honest behaviour for a pulse meter: with no pulse, all you know is that
 demand is *below* some bound.
+
+The **first pulse after a reset is not counted**. It represents energy that accumulated
+over an interval starting before the app was watching, so treating it as a measurement
+would invent a reading from an unknown duration. It sets the baseline timestamp and
+nothing else; the second pulse produces the first real interval.
 
 **Averages and graphs** come from a ring of 3600 one-second buckets (7.2 KB) holding
 milli-pulses:

@@ -23,7 +23,7 @@
 
 #define PM_CONFIG_PATH    APP_DATA_PATH("powermeter.conf")
 #define PM_CONFIG_HEADER  "PowerMeter config"
-#define PM_CONFIG_VERSION 2
+#define PM_CONFIG_VERSION 3
 
 typedef enum {
     PmViewMain,
@@ -68,12 +68,15 @@ extern const PmGraphSpec pm_graphs[];
 typedef struct {
     uint32_t imp_per_kwh;
     uint8_t pin_index;
-    uint8_t pull;
+    /* The internal pull must oppose the pulse level or the sensor has nothing
+     * to pull against, so it is a plain on/off and the direction is derived. */
+    bool internal_pull;
     bool active_high;
     uint16_t min_pulse_ms;
     uint16_t max_pulse_ms;
     uint8_t source;
     uint32_t demo_watts;
+    bool log_scale;
 } PmConfig;
 
 /* Written by the GPIO ISR, drained under a critical section by the tick. */

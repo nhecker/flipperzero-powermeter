@@ -225,6 +225,33 @@ static void test_steady_load_is_not_spiky(void) {
     CHECK(avg > 950 && avg < 1050);
 }
 
+static void test_bar_height(void) {
+    /* Linear is a plain proportion, and the top of the scale fills the plot. */
+    CHECK_EQ(pm_bar_height(0, 1000, 40, false), 0);
+    CHECK_EQ(pm_bar_height(500, 1000, 40, false), 20);
+    CHECK_EQ(pm_bar_height(1000, 1000, 40, false), 40);
+    /* Over-scale values clamp instead of overflowing the plot. */
+    CHECK_EQ(pm_bar_height(4000, 1000, 40, false), 40);
+
+    /* Log: the floor draws as nothing and the ceiling still fills the plot. */
+    CHECK_EQ(pm_bar_height(PM_LOG_FLOOR, 10000, 40, true), 0);
+    CHECK_EQ(pm_bar_height(5, 10000, 40, true), 0);
+    CHECK_EQ(pm_bar_height(10000, 10000, 40, true), 40);
+
+    /* Each decade above the floor should occupy an equal third of the plot
+     * across 10 W -> 10 kW, within the fixed-point approximation. */
+    uint32_t d1 = pm_bar_height(100, 10000, 39, true);
+    uint32_t d2 = pm_bar_height(1000, 10000, 39, true);
+    CHECK(d1 > 9 && d1 < 17);
+    CHECK(d2 > 22 && d2 < 30);
+    /* Monotonic, and small values are lifted clear of the axis. */
+    CHECK(pm_bar_height(50, 10000, 39, true) < d1);
+    CHECK(pm_bar_height(50, 10000, 39, true) > 0);
+    /* The whole point: 100 W is a third of the plot on log, a hundredth on
+     * linear, so quiet periods stay legible next to a big peak. */
+    CHECK(pm_bar_height(100, 10000, 39, true) > pm_bar_height(100, 10000, 39, false));
+}
+
 static void test_formatting(void) {
     char buf[24];
 
@@ -247,11 +274,14 @@ static void test_formatting(void) {
     CHECK_STR(buf, "0.000");
 
     pm_fmt_hms(buf, sizeof(buf), 59);
-    CHECK_STR(buf, "0:59");
+    CHECK_STR(buf, "0m59s");
     pm_fmt_hms(buf, sizeof(buf), 61);
-    CHECK_STR(buf, "1:01");
+    CHECK_STR(buf, "1m01s");
     pm_fmt_hms(buf, sizeof(buf), 3661);
-    CHECK_STR(buf, "1:01:01");
+    CHECK_STR(buf, "1h01m01s");
+    /* 1h02m03s cannot be misread as a day, which 1:02:03 can. */
+    pm_fmt_hms(buf, sizeof(buf), 3723);
+    CHECK_STR(buf, "1h02m03s");
 }
 
 int main(void) {
@@ -264,6 +294,7 @@ int main(void) {
     test_ring_saturation();
     test_ring_interval();
     test_steady_load_is_not_spiky();
+    test_bar_height();
     test_formatting();
 
     printf("%d checks, %d failures\n", checks, failures);
