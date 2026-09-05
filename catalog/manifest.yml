@@ -1,0 +1,31 @@
+# Submission manifest for the Flipper Apps Catalog.
+#
+# This file is not used to build the app. Copy it to
+# applications/GPIO/powermeter/manifest.yml in a fork of
+# flipperdevices/flipper-application-catalog and open a pull request.
+#
+# Before submitting:
+#   - update commit_sha to the commit you want the catalog to build
+#   - keep version in step with fap_version in application.fam
+#   - add at least one screenshot, captured with qFlipper at its native
+#     resolution and format; the first one becomes the store preview
+sourcecode:
+  type: git
+  location:
+    origin: https://github.com/nhecker/flipperzero-powermeter.git
+    commit_sha: 358e873b10098006477fc002d6f75f2849bf3bcd
+
+name: Power Meter
+id: powermeter
+category: GPIO
+version: "1.0"
+author: Nick Hecker
+icon: powermeter_10px.png
+
+short_description: Reads utility meter pulse LEDs and shows live demand in watts
+
+description: "@../README.md"
+changelog: "@../changelog.md"
+
+screenshots:
+  - screenshots/live.png
