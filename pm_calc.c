@@ -180,19 +180,68 @@ uint32_t pm_log2_fx(uint32_t v) {
     return (b << 8) | ((norm - 65536u) >> 8);
 }
 
-uint32_t pm_bar_height(uint32_t value, uint32_t scale, uint32_t height, bool log_scale) {
-    if(scale == 0 || height == 0 || value == 0) return 0;
-    if(value > scale) value = scale;
+/* Largest 1/2/5 x 10^n at or below `value`. */
+uint32_t pm_nice_floor(uint32_t value) {
+    if(value == 0) return 0;
+    uint32_t mag = 1;
+    while(mag <= value / 10 && mag <= 100000000u)
+        mag *= 10;
+    if(value >= 5 * mag) return 5 * mag;
+    if(value >= 2 * mag) return 2 * mag;
+    return mag;
+}
+
+void pm_axis_range(
+    uint32_t data_lo,
+    uint32_t data_hi,
+    bool zero_based,
+    uint32_t* out_lo,
+    uint32_t* out_hi) {
+    if(zero_based) {
+        *out_lo = 0;
+        *out_hi = pm_nice_ceiling(data_hi < 100 ? 100 : data_hi);
+        return;
+    }
+
+    if(data_hi < data_lo) data_hi = data_lo;
+
+    /* A tick step drawn from the span, not from the values: the interesting
+     * detail in a steady load is the span, and snapping the endpoints to it
+     * keeps the plot filled without the axis wandering every frame. */
+    uint32_t span = data_hi - data_lo;
+    uint32_t step = pm_nice_ceiling(span / 4 ? span / 4 : 1);
+
+    uint32_t lo = (data_lo / step) * step;
+    uint32_t hi = ((data_hi + step - 1) / step) * step;
+    if(hi <= lo) hi = lo + step;
+
+    *out_lo = lo;
+    *out_hi = hi;
+}
+
+uint32_t pm_bar_height(uint32_t value, uint32_t lo, uint32_t hi, uint32_t height, bool log_scale) {
+    if(height == 0 || hi <= lo) return 0;
+    if(value > hi) value = hi;
+    if(value <= lo) return 0;
 
     if(!log_scale) {
-        return (uint32_t)(((uint64_t)value * height) / scale);
+        return (uint32_t)(((uint64_t)(value - lo) * height) / (hi - lo));
     }
-    if(scale <= PM_LOG_FLOOR || value <= PM_LOG_FLOOR) return 0;
 
-    uint32_t lo = pm_log2_fx(PM_LOG_FLOOR);
-    uint32_t span = pm_log2_fx(scale) - lo;
+    uint32_t floor = lo > PM_LOG_FLOOR ? lo : PM_LOG_FLOOR;
+    if(hi <= floor || value <= floor) return 0;
+
+    uint32_t f = pm_log2_fx(floor);
+    uint32_t span = pm_log2_fx(hi) - f;
     if(span == 0) return 0;
-    return (uint32_t)(((uint64_t)(pm_log2_fx(value) - lo) * height) / span);
+    return (uint32_t)(((uint64_t)(pm_log2_fx(value) - f) * height) / span);
+}
+
+void pm_fmt_range(char* out, size_t len, uint32_t lo, uint32_t hi) {
+    char a[16], b[16];
+    pm_fmt_watts(a, sizeof(a), lo);
+    pm_fmt_watts(b, sizeof(b), hi);
+    snprintf(out, len, "%s-%s", a, b);
 }
 
 /* One label, one unit, fixed field order: "277/304/517 W" beats three

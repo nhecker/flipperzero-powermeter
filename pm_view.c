@@ -97,7 +97,7 @@ static void pm_draw_graph(Canvas* canvas, PowerMeter* app, uint8_t index) {
         /* Column 0 is the oldest; the newest bucket sits at the right edge.
          * Columns the history does not fully cover are left empty rather than
          * drawn as a real zero. */
-        col[i] = 0;
+        col[i] = PM_COL_EMPTY;
         uint32_t milli;
 
         if(spec->day_ring) {
@@ -120,8 +120,30 @@ static void pm_draw_graph(Canvas* canvas, PowerMeter* app, uint8_t index) {
     if(!valid) low = 0;
     uint32_t avg = valid ? sum / valid : 0;
 
-    uint32_t scale = pm_nice_ceiling(peak < 100 ? 100 : peak);
-    pm_fmt_watts(buf, sizeof(buf), scale);
+    /* Asymmetric latch: adopt a wider range at once, a narrower one only after
+     * it has been stable for a while. */
+    uint32_t want_lo, want_hi;
+    pm_axis_range(low, peak, app->cfg.zero_axis, &want_lo, &want_hi);
+
+    uint32_t now_ms = furi_get_tick();
+    bool escaped = !app->axis_held[index] || want_lo < app->axis_lo[index] ||
+                   want_hi > app->axis_hi[index];
+    if(escaped || (now_ms - app->axis_at[index]) >= PM_AXIS_SETTLE_MS) {
+        app->axis_lo[index] = want_lo;
+        app->axis_hi[index] = want_hi;
+        app->axis_held[index] = true;
+        if(!escaped) app->axis_at[index] = now_ms;
+    }
+    if(escaped) app->axis_at[index] = now_ms;
+
+    const uint32_t axis_lo = app->axis_lo[index];
+    const uint32_t axis_hi = app->axis_hi[index];
+
+    if(app->cfg.zero_axis) {
+        pm_fmt_watts(buf, sizeof(buf), axis_hi);
+    } else {
+        pm_fmt_range(buf, sizeof(buf), axis_lo, axis_hi);
+    }
     snprintf(head, sizeof(head), "%s%s", app->cfg.log_scale ? "log " : "", buf);
     pm_draw_header(canvas, app, spec->title, head);
 
@@ -135,12 +157,26 @@ static void pm_draw_graph(Canvas* canvas, PowerMeter* app, uint8_t index) {
     canvas_draw_line(canvas, PM_GRAPH_X - 1, PM_GRAPH_TOP, PM_GRAPH_X - 1, base);
     canvas_draw_line(canvas, PM_GRAPH_X - 1, base, PM_GRAPH_X + PM_GRAPH_W - 1, base);
 
+    /* A line, not bars: with a fitted axis the baseline is not zero, and a bar
+     * whose length no longer encodes magnitude actively misleads. */
+    int32_t prev_x = -1, prev_y = 0;
     for(uint8_t i = 0; i < PM_GRAPH_W; i++) {
-        if(col[i] == 0) continue;
-        uint32_t h = pm_bar_height(col[i], scale, (uint32_t)height, app->cfg.log_scale);
-        if(h == 0) h = 1;
+        if(col[i] == PM_COL_EMPTY) {
+            prev_x = -1; /* break the line across gaps rather than bridging */
+            continue;
+        }
+        uint32_t h = pm_bar_height(col[i], axis_lo, axis_hi, (uint32_t)height, app->cfg.log_scale);
         if(h > (uint32_t)height) h = height;
-        canvas_draw_line(canvas, PM_GRAPH_X + i, base - h, PM_GRAPH_X + i, base - 1);
+
+        int32_t x = PM_GRAPH_X + i;
+        int32_t y = base - (int32_t)h;
+        if(prev_x >= 0) {
+            canvas_draw_line(canvas, prev_x, prev_y, x, y);
+        } else {
+            canvas_draw_dot(canvas, x, y);
+        }
+        prev_x = x;
+        prev_y = y;
     }
 
     /* min/avg/max of the columns actually plotted, so the numbers always

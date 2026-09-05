@@ -5,6 +5,7 @@
 
 static const char* const pm_onoff_names[] = {"Off", "On"};
 static const char* const pm_scale_names[] = {"Linear", "Log"};
+static const char* const pm_axis_names[] = {"Zero", "Fit"};
 static const uint32_t pm_min_values[] = {1, 2, 3, 5, 10, 20, 30, 50};
 static const uint32_t pm_max_values[] = {50, 100, 150, 200, 250, 300, 500, 1000};
 static const uint32_t pm_demo_values[] = {100, 250, 500, 1000, 2000, 3500, 5000, 8000, 12000};
@@ -35,6 +36,7 @@ void pm_config_set_defaults(PmConfig* cfg) {
     cfg->source = PmSourceGpio;
     cfg->demo_watts = 1000;
     cfg->log_scale = false;
+    cfg->zero_axis = true;
 }
 
 static uint32_t pm_read_u32(FlipperFormat* ff, const char* key, uint32_t fallback) {
@@ -73,6 +75,7 @@ void pm_config_load(PowerMeter* app) {
         cfg->active_high = pm_read_bool(ff, "active_high", cfg->active_high);
         cfg->internal_pull = pm_read_bool(ff, "internal_pull", cfg->internal_pull);
         cfg->log_scale = pm_read_bool(ff, "log_scale", cfg->log_scale);
+        cfg->zero_axis = pm_read_bool(ff, "zero_axis", cfg->zero_axis);
     } while(false);
 
     furi_string_free(type);
@@ -127,6 +130,8 @@ void pm_config_save(PowerMeter* app) {
         flipper_format_write_bool(ff, "internal_pull", &b, 1);
         b = cfg->log_scale;
         flipper_format_write_bool(ff, "log_scale", &b, 1);
+        b = cfg->zero_axis;
+        flipper_format_write_bool(ff, "zero_axis", &b, 1);
     } while(false);
 
     flipper_format_free(ff);
@@ -226,6 +231,17 @@ static void pm_on_scale(VariableItem* item) {
     app->cfg.log_scale = (i == 1);
 }
 
+static void pm_on_axis(VariableItem* item) {
+    PowerMeter* app = variable_item_get_context(item);
+    uint8_t i = variable_item_get_current_value_index(item);
+    variable_item_set_current_value_text(item, pm_axis_names[i]);
+    app->cfg.zero_axis = (i == 0);
+    /* Drop the latched ranges so the change is visible at once. */
+    for(size_t p = 0; p < COUNT_OF(app->axis_held); p++) {
+        app->axis_held[p] = false;
+    }
+}
+
 static void pm_on_min(VariableItem* item) {
     PowerMeter* app = variable_item_get_context(item);
     uint8_t i = variable_item_get_current_value_index(item);
@@ -250,17 +266,34 @@ static void pm_on_demo(VariableItem* item) {
     variable_item_set_current_value_text(item, pm_buf_demo);
 }
 
-#define PM_ITEM_RESET 7
+/* The enter callback is handed a positional index, so the rows it acts on have
+ * to be recorded as the list is built. Hardcoding the numbers silently
+ * retargets the wrong row the moment anything is inserted above -- which is
+ * exactly what happened when Chart scale and Y axis were added, leaving OK on
+ * "Max pulse" resetting the session and OK on "Reset stats" doing nothing. */
+static uint8_t pm_item_n;
+static uint8_t pm_idx_imp;
+static uint8_t pm_idx_reset;
 
-#define PM_ITEM_IMP 1
+static VariableItem* pm_add(
+    VariableItemList* list,
+    const char* label,
+    uint8_t values,
+    VariableItemChangeCallback cb,
+    void* ctx,
+    uint8_t* out_index) {
+    if(out_index) *out_index = pm_item_n;
+    pm_item_n++;
+    return variable_item_list_add(list, label, values, cb, ctx);
+}
 
 static void pm_on_enter(void* context, uint32_t index) {
     PowerMeter* app = context;
-    if(index == PM_ITEM_IMP) {
+    if(index == pm_idx_imp) {
         view_dispatcher_send_custom_event(app->view_dispatcher, PmEventNumber);
         return;
     }
-    if(index != PM_ITEM_RESET) return;
+    if(index != pm_idx_reset) return;
     pm_session_reset(app);
     notification_message(app->notifications, &sequence_success);
 }
@@ -270,46 +303,51 @@ void pm_settings_build(PowerMeter* app) {
     VariableItem* item;
     uint8_t idx;
 
+    pm_item_n = 0;
     pm_usable_build(app);
     idx = pm_source_index(app);
-    item = variable_item_list_add(list, "Source", (uint8_t)PM_SRC_COUNT, pm_on_source, app);
+    item = pm_add(list, "Source", (uint8_t)PM_SRC_COUNT, pm_on_source, app, NULL);
     variable_item_set_current_value_index(item, idx);
     pm_source_text(idx, pm_buf_pin, sizeof(pm_buf_pin));
     variable_item_set_current_value_text(item, pm_buf_pin);
 
-    pm_item_imp = variable_item_list_add(list, "Pulses/kWh", 1, NULL, app);
+    pm_item_imp = pm_add(list, "Pulses/kWh", 1, NULL, app, &pm_idx_imp);
     pm_settings_refresh_imp(app);
 
-    item = variable_item_list_add(list, "Internal pull", 2, pm_on_pull, app);
+    item = pm_add(list, "Internal pull", 2, pm_on_pull, app, NULL);
     variable_item_set_current_value_index(item, app->cfg.internal_pull ? 1 : 0);
     variable_item_set_current_value_text(item, pm_onoff_names[app->cfg.internal_pull ? 1 : 0]);
 
-    item = variable_item_list_add(list, "Pulse level", 2, pm_on_level, app);
+    item = pm_add(list, "Pulse level", 2, pm_on_level, app, NULL);
     variable_item_set_current_value_index(item, app->cfg.active_high ? 1 : 0);
     variable_item_set_current_value_text(item, pm_level_names[app->cfg.active_high ? 1 : 0]);
 
-    item = variable_item_list_add(list, "Chart scale", 2, pm_on_scale, app);
+    item = pm_add(list, "Chart scale", 2, pm_on_scale, app, NULL);
     variable_item_set_current_value_index(item, app->cfg.log_scale ? 1 : 0);
     variable_item_set_current_value_text(item, pm_scale_names[app->cfg.log_scale ? 1 : 0]);
 
-    item = variable_item_list_add(list, "Min pulse", COUNT_OF(pm_min_values), pm_on_min, app);
+    item = pm_add(list, "Y axis", 2, pm_on_axis, app, NULL);
+    variable_item_set_current_value_index(item, app->cfg.zero_axis ? 0 : 1);
+    variable_item_set_current_value_text(item, pm_axis_names[app->cfg.zero_axis ? 0 : 1]);
+
+    item = pm_add(list, "Min pulse", COUNT_OF(pm_min_values), pm_on_min, app, NULL);
     idx = pm_index_of(pm_min_values, COUNT_OF(pm_min_values), app->cfg.min_pulse_ms);
     variable_item_set_current_value_index(item, idx);
     snprintf(pm_buf_min, sizeof(pm_buf_min), "%lums", (unsigned long)pm_min_values[idx]);
     variable_item_set_current_value_text(item, pm_buf_min);
     app->cfg.min_pulse_ms = (uint16_t)pm_min_values[idx];
 
-    item = variable_item_list_add(list, "Max pulse", COUNT_OF(pm_max_values), pm_on_max, app);
+    item = pm_add(list, "Max pulse", COUNT_OF(pm_max_values), pm_on_max, app, NULL);
     idx = pm_index_of(pm_max_values, COUNT_OF(pm_max_values), app->cfg.max_pulse_ms);
     variable_item_set_current_value_index(item, idx);
     snprintf(pm_buf_max, sizeof(pm_buf_max), "%lums", (unsigned long)pm_max_values[idx]);
     variable_item_set_current_value_text(item, pm_buf_max);
     app->cfg.max_pulse_ms = (uint16_t)pm_max_values[idx];
 
-    item = variable_item_list_add(list, "Reset stats", 1, NULL, app);
+    item = pm_add(list, "Reset stats", 1, NULL, app, &pm_idx_reset);
     variable_item_set_current_value_text(item, "OK");
 
-    item = variable_item_list_add(list, "Demo load", COUNT_OF(pm_demo_values), pm_on_demo, app);
+    item = pm_add(list, "Demo load", COUNT_OF(pm_demo_values), pm_on_demo, app, NULL);
     idx = pm_index_of(pm_demo_values, COUNT_OF(pm_demo_values), app->cfg.demo_watts);
     variable_item_set_current_value_index(item, idx);
     snprintf(pm_buf_demo, sizeof(pm_buf_demo), "%luW", (unsigned long)pm_demo_values[idx]);

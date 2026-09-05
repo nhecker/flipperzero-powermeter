@@ -162,7 +162,21 @@ the labelled form will not fit.
 
 **Chart scale** switches between linear and logarithmic. Log compresses toward a 10 W
 floor, which keeps a 100 W standby load legible on the same axis as a 10 kW peak instead
-of flattening it against the baseline. Values below the floor draw as nothing.
+of flattening it against the baseline.
+
+**Y axis** switches between `Zero` and `Fit`. Zero-based is the honest default. Fit
+rescales to the data, which is what makes a steady load readable: a meter sitting between
+3370 W and 3390 W is a flat line on a 0–5000 W axis, and 20 W of real detail on a fitted
+one. The range is picked from the *span* of the data rather than by rounding its endpoints,
+since nice-rounding 3370 and 3390 gives 2000–5000 and changes nothing.
+
+The fitted range is latched **asymmetrically**: it widens the instant data leaves it, so a
+spike can never be clipped, and narrows only after a minute of stability, so the axis does
+not breathe while you are reading it. Both endpoints are shown in the header.
+
+Graphs draw as a line rather than bars. With a fitted axis the baseline is not zero, and a
+bar whose length no longer encodes magnitude misleads; a line carries no such implication.
+Gaps in history break the line rather than being bridged.
 
 The Diag page is the one to watch when testing the IR source. `IR edges` counts every
 transition the receiver reports, before any filtering. If it stays at zero while the meter

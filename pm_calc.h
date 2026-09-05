@@ -72,10 +72,28 @@ uint32_t pm_watts_from_milli(uint32_t imp_per_kwh, uint32_t milli, uint32_t seco
 uint32_t pm_interval_from_watts(uint32_t imp_per_kwh, uint32_t watts);
 uint32_t pm_nice_ceiling(uint32_t value);
 
-/** Bar height in pixels. Log mode compresses toward PM_LOG_FLOOR watts, below
- *  which a value draws as nothing. */
+uint32_t pm_nice_floor(uint32_t value);
+
+/** Choose the y range to plot.
+ *
+ *  Zero-based gives [0, nice ceiling]. Fitted picks a tick step from the span
+ *  of the data and snaps outward to it -- nice-rounding the min and max
+ *  directly is far too coarse to zoom with, since 3370..3390 W would round out
+ *  to 2000..5000 and stay a flat line. */
+void pm_axis_range(
+    uint32_t data_lo,
+    uint32_t data_hi,
+    bool zero_based,
+    uint32_t* out_lo,
+    uint32_t* out_hi);
+
+/** Height in pixels of `value` on an axis spanning [lo, hi]. Log mode uses the
+ *  greater of `lo` and PM_LOG_FLOOR as its floor; anything at or below the
+ *  floor draws at zero height. */
 uint32_t pm_log2_fx(uint32_t v);
-uint32_t pm_bar_height(uint32_t value, uint32_t scale, uint32_t height, bool log_scale);
+uint32_t pm_bar_height(uint32_t value, uint32_t lo, uint32_t hi, uint32_t height, bool log_scale);
+
+void pm_fmt_range(char* out, size_t len, uint32_t lo, uint32_t hi);
 
 void pm_fmt_watts(char* out, size_t len, uint32_t watts);
 void pm_fmt_kwh(char* out, size_t len, uint32_t imp_per_kwh, uint32_t pulses);

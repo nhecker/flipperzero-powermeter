@@ -257,29 +257,29 @@ static void test_no_per_pulse_spike(void) {
 
 static void test_bar_height(void) {
     /* Linear is a plain proportion, and the top of the scale fills the plot. */
-    CHECK_EQ(pm_bar_height(0, 1000, 40, false), 0);
-    CHECK_EQ(pm_bar_height(500, 1000, 40, false), 20);
-    CHECK_EQ(pm_bar_height(1000, 1000, 40, false), 40);
+    CHECK_EQ(pm_bar_height(0, 0, 1000, 40, false), 0);
+    CHECK_EQ(pm_bar_height(500, 0, 1000, 40, false), 20);
+    CHECK_EQ(pm_bar_height(1000, 0, 1000, 40, false), 40);
     /* Over-scale values clamp instead of overflowing the plot. */
-    CHECK_EQ(pm_bar_height(4000, 1000, 40, false), 40);
+    CHECK_EQ(pm_bar_height(4000, 0, 1000, 40, false), 40);
 
     /* Log: the floor draws as nothing and the ceiling still fills the plot. */
-    CHECK_EQ(pm_bar_height(PM_LOG_FLOOR, 10000, 40, true), 0);
-    CHECK_EQ(pm_bar_height(5, 10000, 40, true), 0);
-    CHECK_EQ(pm_bar_height(10000, 10000, 40, true), 40);
+    CHECK_EQ(pm_bar_height(PM_LOG_FLOOR, 0, 10000, 40, true), 0);
+    CHECK_EQ(pm_bar_height(5, 0, 10000, 40, true), 0);
+    CHECK_EQ(pm_bar_height(10000, 0, 10000, 40, true), 40);
 
     /* Each decade above the floor should occupy an equal third of the plot
      * across 10 W -> 10 kW, within the fixed-point approximation. */
-    uint32_t d1 = pm_bar_height(100, 10000, 39, true);
-    uint32_t d2 = pm_bar_height(1000, 10000, 39, true);
+    uint32_t d1 = pm_bar_height(100, 0, 10000, 39, true);
+    uint32_t d2 = pm_bar_height(1000, 0, 10000, 39, true);
     CHECK(d1 > 9 && d1 < 17);
     CHECK(d2 > 22 && d2 < 30);
     /* Monotonic, and small values are lifted clear of the axis. */
-    CHECK(pm_bar_height(50, 10000, 39, true) < d1);
-    CHECK(pm_bar_height(50, 10000, 39, true) > 0);
+    CHECK(pm_bar_height(50, 0, 10000, 39, true) < d1);
+    CHECK(pm_bar_height(50, 0, 10000, 39, true) > 0);
     /* The whole point: 100 W is a third of the plot on log, a hundredth on
      * linear, so quiet periods stay legible next to a big peak. */
-    CHECK(pm_bar_height(100, 10000, 39, true) > pm_bar_height(100, 10000, 39, false));
+    CHECK(pm_bar_height(100, 0, 10000, 39, true) > pm_bar_height(100, 0, 10000, 39, false));
 }
 
 static void test_interval_round_trip(void) {
@@ -373,6 +373,60 @@ static void test_day_ring(void) {
     CHECK_EQ(day.filled, 1);
 }
 
+static void test_axis_range(void) {
+    uint32_t lo, hi;
+
+    pm_axis_range(0, 3390, true, &lo, &hi);
+    CHECK_EQ(lo, 0);
+    CHECK_EQ(hi, 5000);
+    /* An idle meter still gets a sane axis rather than a degenerate one. */
+    pm_axis_range(0, 0, true, &lo, &hi);
+    CHECK_EQ(lo, 0);
+    CHECK_EQ(hi, 100);
+
+    /* The point of the feature: a steady 3370-3390 W load must fill the plot.
+     * Nice-rounding the endpoints directly would give 2000..5000 and stay the
+     * flat line it already was. */
+    pm_axis_range(3370, 3390, false, &lo, &hi);
+    CHECK(lo >= 3350 && lo <= 3370);
+    CHECK(hi >= 3390 && hi <= 3410);
+    CHECK(hi - lo <= 60);
+
+    /* A wide-ranging load still gets a sensible axis. */
+    pm_axis_range(100, 3000, false, &lo, &hi);
+    CHECK(lo <= 100);
+    CHECK(hi >= 3000);
+
+    /* Perfectly flat data must not produce a zero-width axis. */
+    pm_axis_range(1500, 1500, false, &lo, &hi);
+    CHECK(hi > lo);
+}
+
+static void test_fitted_axis_resolves_detail(void) {
+    /* 3370 and 3390 W should land at clearly different heights on a fitted
+     * axis, and at the same height on a zero-based one -- which is the whole
+     * reason the setting exists. */
+    uint32_t lo, hi;
+    pm_axis_range(3370, 3390, false, &lo, &hi);
+    uint32_t a = pm_bar_height(3370, lo, hi, 40, false);
+    uint32_t b = pm_bar_height(3390, lo, hi, 40, false);
+    CHECK(b > a + 20);
+
+    pm_axis_range(3370, 3390, true, &lo, &hi);
+    uint32_t za = pm_bar_height(3370, lo, hi, 40, false);
+    uint32_t zb = pm_bar_height(3390, lo, hi, 40, false);
+    CHECK(zb - za < 2);
+}
+
+static void test_nice_floor(void) {
+    CHECK_EQ(pm_nice_floor(0), 0);
+    CHECK_EQ(pm_nice_floor(1), 1);
+    CHECK_EQ(pm_nice_floor(9), 5);
+    CHECK_EQ(pm_nice_floor(100), 100);
+    CHECK_EQ(pm_nice_floor(3390), 2000);
+    CHECK_EQ(pm_nice_floor(5000), 5000);
+}
+
 static void test_formatting(void) {
     char buf[24];
 
@@ -417,6 +471,9 @@ int main(void) {
     test_steady_load_is_not_spiky();
     test_no_per_pulse_spike();
     test_bar_height();
+    test_nice_floor();
+    test_axis_range();
+    test_fitted_axis_resolves_detail();
     test_interval_round_trip();
     test_ring_age();
     test_triple_and_wh();

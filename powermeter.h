@@ -14,13 +14,15 @@
 
 #include "pm_calc.h"
 
-#define PM_TICK_MS       100u
-#define PM_BLINK_MS      180u
-#define PM_IR_TIMEOUT_US 20000u
-#define PM_GRAPH_X       4
-#define PM_GRAPH_W       120
-#define PM_GRAPH_TOP     13
-#define PM_GRAPH_BOTTOM  53
+#define PM_TICK_MS        100u
+#define PM_BLINK_MS       180u
+#define PM_IR_TIMEOUT_US  20000u
+#define PM_AXIS_SETTLE_MS 60000u
+#define PM_COL_EMPTY      0xFFFFFFFFu
+#define PM_GRAPH_X        4
+#define PM_GRAPH_W        120
+#define PM_GRAPH_TOP      13
+#define PM_GRAPH_BOTTOM   53
 
 #define PM_CONFIG_PATH    APP_DATA_PATH("powermeter.conf")
 #define PM_CONFIG_HEADER  "PowerMeter config"
@@ -88,6 +90,7 @@ typedef struct {
     uint8_t source;
     uint32_t demo_watts;
     bool log_scale;
+    bool zero_axis;
 } PmConfig;
 
 /* Written by the GPIO ISR, drained under a critical section by the tick. */
@@ -151,6 +154,14 @@ typedef struct {
     /* Scratch for graph rendering. Lives here rather than on the draw
      * callback's stack, which belongs to the GUI service thread. */
     uint32_t graph_col[PM_GRAPH_W];
+
+    /* Latched y range per graph page. Widened the instant data leaves it so a
+     * spike can never be clipped, narrowed only on a timer so the axis does
+     * not breathe while you are reading it. */
+    uint32_t axis_lo[PmPageCount];
+    uint32_t axis_hi[PmPageCount];
+    uint32_t axis_at[PmPageCount];
+    bool axis_held[PmPageCount];
 } PowerMeter;
 
 typedef struct {
