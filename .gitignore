@@ -1,0 +1,9 @@
+dist/
+build/
+.vscode/
+.ufbt/
+tests/test_pm_calc
+*.dSYM/
+*.o
+.DS_Store
+._*
